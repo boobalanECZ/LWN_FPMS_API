@@ -1,0 +1,6 @@
+@DFN_BMS_HostAddress = http://localhost:5058
+
+GET {{DFN_BMS_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
