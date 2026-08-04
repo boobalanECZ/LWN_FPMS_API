@@ -19,6 +19,7 @@ namespace DFN_BMS.Controllers
             _enc = enc;
         }
         //Test
+        //Test
 
         [HttpPost("heartbeat")]
         public async Task<IActionResult> Heartbeat()
