@@ -20,7 +20,11 @@ namespace DFN_BMS.DB
         public DbSet<SupplierMaster> SupplierMasters { get; set; }
         public DbSet<CustomerGroupMaster> CustomerGroupMasters { get; set; }
         public DbSet<CustomerMaster> CustomerMasters { get; set; }
-
         public DbSet<PriceMaster> PriceMasters { get; set; }
+        public DbSet<StoreMaster> StoreMasters { get; set; }
+        public DbSet<LocationMaster> LocationMasters { get; set; }
+        public DbSet<LocationRack> LocationRacks { get; set; }
+        public DbSet<RackColumn> RackColumns { get; set; }
+        public DbSet<RackRow> RackRows { get; set; }
     }
 }

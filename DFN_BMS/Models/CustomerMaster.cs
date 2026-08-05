@@ -1,7 +1,6 @@
 ﻿using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-
 namespace DFN_BMS.Models
 {
     [Table("CUSTOMER_MASTER")]
@@ -29,6 +28,13 @@ namespace DFN_BMS.Models
         [Required]
         [MaxLength(100)]
         public string EmailId { get; set; }
+
+        [Required]
+        [MaxLength(15)]
+        [RegularExpression(
+            @"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$",
+            ErrorMessage = "Enter a valid 15-character GSTIN (e.g. 33ABCDE1234F1Z5)")]
+        public string GstNo { get; set; }
 
         public DateTime CreatedDate { get; set; } = DateTime.Now;
 
