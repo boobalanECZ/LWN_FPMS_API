@@ -113,34 +113,6 @@ namespace DFN_BMS.Controllers
             return Ok(item);
         }
 
-        // GET: api/ItemMaster/next-number
-        [HttpGet("next-number")]
-        public async Task<IActionResult> GetNextNumber()
-        {
-            var number = await GenerateItemNumberAsync();
-            return Ok(new { itemNumber = number });
-        }
-
-        private async Task<string> GenerateItemNumberAsync()
-        {
-            var lastItem = await _context.ItemMasters
-                .OrderByDescending(x => x.Id)
-                .FirstOrDefaultAsync();
-
-            int nextSeq = 1;
-
-            if (lastItem != null && lastItem.ItemNumber.StartsWith("ITM-"))
-            {
-                var numericPart = lastItem.ItemNumber.Substring(4);
-                if (int.TryParse(numericPart, out int lastSeq))
-                {
-                    nextSeq = lastSeq + 1;
-                }
-            }
-
-            return $"ITM-{nextSeq:D4}";
-        }
-
         // Shared helper: the frontend's Item Type dropdown (CreatableSelect)
         // always sends ItemTypeName (uppercased), whether the person picked
         // an existing type or typed a brand new one. This resolves that
@@ -185,16 +157,23 @@ namespace DFN_BMS.Controllers
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] ItemMaster model)
         {
-            if (string.IsNullOrWhiteSpace(model.ItemName) ||
+            if (string.IsNullOrWhiteSpace(model.ItemNumber) ||
+                string.IsNullOrWhiteSpace(model.ItemName) ||
                 string.IsNullOrWhiteSpace(model.Uom) ||
                 model.ItemGroupId <= 0)
             {
-                return BadRequest(new { message = "Item Name, Item Group and UOM are required" });
+                return BadRequest(new { message = "Item Number, Item Name, Item Group and UOM are required" });
             }
 
             var groupExists = await _context.ItemGroupMasters.AnyAsync(g => g.Id == model.ItemGroupId);
             if (!groupExists)
                 return BadRequest(new { message = "Selected Item Group does not exist" });
+
+            var numberExists = await _context.ItemMasters
+                .AnyAsync(x => x.ItemNumber.ToLower() == model.ItemNumber.Trim().ToLower());
+
+            if (numberExists)
+                return BadRequest(new { message = "Item Number already exists" });
 
             var nameExists = await _context.ItemMasters
                 .AnyAsync(x => x.ItemName.ToLower() == model.ItemName.Trim().ToLower());
@@ -208,7 +187,7 @@ namespace DFN_BMS.Controllers
 
             var entity = new ItemMaster
             {
-                ItemNumber = await GenerateItemNumberAsync(),
+                ItemNumber = model.ItemNumber.Trim(),
                 ItemName = model.ItemName.Trim(),
                 ItemTypeId = model.ItemTypeId,
                 ItemGroupId = model.ItemGroupId,

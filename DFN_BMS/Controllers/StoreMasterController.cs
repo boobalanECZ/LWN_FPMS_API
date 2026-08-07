@@ -27,7 +27,17 @@ namespace DFN_BMS.Controllers
         public async Task<IActionResult> GetAll()
         {
             var list = await _context.StoreMasters
+                .Include(x => x.PalletType)
                 .OrderByDescending(x => x.Id)
+                .Select(x => new
+                {
+                    x.Id,
+                    x.StoreLocation,
+                    x.PalletTypeId,
+                    PalletTypeName = x.PalletType.PalletName,
+                    x.PalletNumber,
+                    x.ColourCode
+                })
                 .ToListAsync();
 
             return Ok(list);
@@ -45,12 +55,28 @@ namespace DFN_BMS.Controllers
             return Ok(item);
         }
 
+        // Generates the next pallet number for a series, wrapping back to
+        // RangeFrom once RangeTo is passed — e.g. IN-01 .. IN-30, then
+        // IN-01 again. Updates CurrentSequence on the type so the next
+        // call continues from here.
+        private async Task<string> GenerateNextPalletNumberAsync(PalletTypeMaster type)
+        {
+            int next = type.CurrentSequence + 1;
+            if (next > type.RangeTo)
+                next = type.RangeFrom;
+
+            type.CurrentSequence = next;
+            await _context.SaveChangesAsync();
+
+            return $"{type.PalletName}-{next:D2}";
+        }
+
         // POST: api/StoreMaster
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] StoreMaster model)
         {
             if (string.IsNullOrWhiteSpace(model.StoreLocation) ||
-                string.IsNullOrWhiteSpace(model.PalletNumber) ||
+                model.PalletTypeId <= 0 ||
                 string.IsNullOrWhiteSpace(model.ColourCode))
             {
                 return BadRequest(new { message = "Please fill all required fields" });
@@ -61,16 +87,15 @@ namespace DFN_BMS.Controllers
             if (!ColourRegex.IsMatch(colourCode))
                 return BadRequest(new { message = "Colour must be a valid hex code (e.g. #1E88E5)" });
 
-            var palletExists = await _context.StoreMasters
-                .AnyAsync(x => x.PalletNumber.ToLower() == model.PalletNumber.Trim().ToLower());
-
-            if (palletExists)
-                return BadRequest(new { message = "Pallet Number already exists" });
+            var palletType = await _context.PalletTypeMasters.FindAsync(model.PalletTypeId);
+            if (palletType == null)
+                return BadRequest(new { message = "Selected Pallet Type does not exist" });
 
             var entity = new StoreMaster
             {
                 StoreLocation = model.StoreLocation.Trim(),
-                PalletNumber = model.PalletNumber.Trim(),
+                PalletTypeId = model.PalletTypeId,
+                PalletNumber = await GenerateNextPalletNumberAsync(palletType),
                 ColourCode = colourCode.ToUpper(),
                 CreatedDate = DateTime.Now
             };
@@ -82,6 +107,9 @@ namespace DFN_BMS.Controllers
         }
 
         // PUT: api/StoreMaster/5
+        // Note: changing the Pallet Type on an existing row does NOT
+        // regenerate PalletNumber — that's assigned once, at creation.
+        // Editing here only updates Store Location and Colour.
         [HttpPut("{id}")]
         public async Task<IActionResult> Update(int id, [FromBody] StoreMaster model)
         {
@@ -91,7 +119,6 @@ namespace DFN_BMS.Controllers
                 return NotFound(new { message = "Store record not found" });
 
             if (string.IsNullOrWhiteSpace(model.StoreLocation) ||
-                string.IsNullOrWhiteSpace(model.PalletNumber) ||
                 string.IsNullOrWhiteSpace(model.ColourCode))
             {
                 return BadRequest(new { message = "Please fill all required fields" });
@@ -102,14 +129,7 @@ namespace DFN_BMS.Controllers
             if (!ColourRegex.IsMatch(colourCode))
                 return BadRequest(new { message = "Colour must be a valid hex code (e.g. #1E88E5)" });
 
-            var palletExists = await _context.StoreMasters
-                .AnyAsync(x => x.PalletNumber.ToLower() == model.PalletNumber.Trim().ToLower() && x.Id != id);
-
-            if (palletExists)
-                return BadRequest(new { message = "Pallet Number already exists" });
-
             entity.StoreLocation = model.StoreLocation.Trim();
-            entity.PalletNumber = model.PalletNumber.Trim();
             entity.ColourCode = colourCode.ToUpper();
             entity.ModifiedDate = DateTime.Now;
 

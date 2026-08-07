@@ -8,7 +8,7 @@ using DFN_BMS.Models;
 
 namespace DFN_BMS.Controllers
 {
-    // Store/Location CRUD only. Rack/Column/Row management now lives in
+    // Store/Location CRUD only. Rack/Column/Row management lives in
     // LocationRackController (api/LocationRack/...).
     [ApiController]
     [Route("api/[controller]")]

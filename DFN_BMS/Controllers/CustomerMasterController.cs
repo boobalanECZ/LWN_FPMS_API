@@ -19,6 +19,7 @@ namespace DFN_BMS.Controllers
         // + 1 alphanumeric (entity code) + literal 'Z' + 1 alphanumeric (checksum)
         private static readonly Regex GstRegex =
             new Regex(@"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$");
+        private static readonly Regex NameRegex = new Regex(@"^[A-Za-z0-9_ ]+$");
 
         public CustomerMasterController(AppDbContext context)
         {
@@ -63,6 +64,9 @@ namespace DFN_BMS.Controllers
             }
 
             var gstNo = model.GstNo.Trim().ToUpper();
+
+            if (!NameRegex.IsMatch(model.CustomerName.Trim()))
+                return BadRequest(new { message = "Customer Name: only letters, numbers, underscore and spaces are allowed (e.g. Test_233)" });
 
             if (!GstRegex.IsMatch(gstNo))
                 return BadRequest(new { message = "Enter a valid 15-character GSTIN (e.g. 33ABCDE1234F1Z5)" });
@@ -127,6 +131,9 @@ namespace DFN_BMS.Controllers
             }
 
             var gstNo = model.GstNo.Trim().ToUpper();
+
+            if (!NameRegex.IsMatch(model.CustomerName.Trim()))
+                return BadRequest(new { message = "Customer Name: only letters, numbers, underscore and spaces are allowed (e.g. Test_233)" });
 
             if (!GstRegex.IsMatch(gstNo))
                 return BadRequest(new { message = "Enter a valid 15-character GSTIN (e.g. 33ABCDE1234F1Z5)" });

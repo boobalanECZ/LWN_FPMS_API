@@ -15,6 +15,7 @@ namespace DFN_BMS.Models
 
         [Required]
         [MaxLength(150)]
+        [RegularExpression(@"^[A-Za-z0-9_ ]+$", ErrorMessage = "Only letters, numbers, underscore and spaces are allowed (e.g. Test_233)")]
         public string CustomerName { get; set; }
 
         [Required]

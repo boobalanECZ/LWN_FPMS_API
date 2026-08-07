@@ -1,6 +1,7 @@
 ﻿using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 
 namespace DFN_BMS.Models
 {
@@ -15,8 +16,16 @@ namespace DFN_BMS.Models
         public string StoreLocation { get; set; }
 
         [Required]
+        public int PalletTypeId { get; set; }   // FK -> PalletTypeMaster.Id
+
+        [ForeignKey("PalletTypeId")]
+        [ValidateNever]
+        public PalletTypeMaster? PalletType { get; set; }
+
+        [Required]
         [MaxLength(30)]
-        public string PalletNumber { get; set; }   // manually entered by the user
+        [ValidateNever]
+        public string PalletNumber { get; set; }   // server-generated, e.g. "IN-01"
 
         [Required]
         [MaxLength(7)]

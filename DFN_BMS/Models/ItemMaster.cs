@@ -13,8 +13,7 @@ namespace DFN_BMS.Models
 
         [Required]
         [MaxLength(30)]
-        [ValidateNever]
-        public string ItemNumber { get; set; }   // auto-generated, e.g. ITM-0001
+        public string ItemNumber { get; set; }   // manually entered by the user
 
         [Required]
         [MaxLength(150)]
@@ -51,7 +50,7 @@ namespace DFN_BMS.Models
 
         [Required]
         [MaxLength(20)]
-        public string Uom { get; set; }           // free text now, no fixed list
+        public string Uom { get; set; }           // free text, no fixed list
 
         [Column(TypeName = "decimal(18,3)")]
         public decimal? WeightPerUnit { get; set; }
@@ -63,7 +62,7 @@ namespace DFN_BMS.Models
         public string ItemModel { get; set; }
 
         [MaxLength(30)]
-        public string Usage { get; set; }         // free text now, no fixed list
+        public string Usage { get; set; }         // free text, no fixed list
 
         [Column(TypeName = "decimal(18,2)")]
         public decimal? Length { get; set; }
@@ -87,7 +86,7 @@ namespace DFN_BMS.Models
 
         [Required]
         [MaxLength(20)]
-        public string DangerLevel { get; set; }   // free text now, no fixed list
+        public string DangerLevel { get; set; }   // free text, no fixed list
 
         public DateTime CreatedDate { get; set; } = DateTime.Now;
 
