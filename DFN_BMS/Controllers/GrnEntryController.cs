@@ -17,6 +17,8 @@ namespace DFN_BMS.Controllers
         private readonly AppDbContext _context;
 
         private static readonly string[] ValidGrnTypes = { "Regular", "Sample" };
+        private static readonly System.Text.RegularExpressions.Regex InvoiceNumberRegex =
+            new System.Text.RegularExpressions.Regex(@"^[0-9]+$");
 
         public GrnEntryController(AppDbContext context)
         {
@@ -214,6 +216,9 @@ namespace DFN_BMS.Controllers
                 if (!ValidGrnTypes.Contains(req.GrnType))
                     return BadRequest(new { message = "GRN Type must be 'Regular' or 'Sample'" });
 
+                if (!InvoiceNumberRegex.IsMatch(req.SupplierInvoiceNumber.Trim()))
+                    return BadRequest(new { message = "Supplier Invoice Number must be numbers only" });
+
                 var supplierExists = await _context.SupplierMasters.AnyAsync(x => x.Id == req.SupplierId);
                 if (!supplierExists)
                     return BadRequest(new { message = "Selected Supplier does not exist" });
@@ -260,7 +265,7 @@ namespace DFN_BMS.Controllers
                         PalletQuantity = line.PalletQuantity,
                         Rate = line.Rate,
                         Quantity = line.Quantity,
-                        TotalValue = Math.Round(line.Rate * line.Quantity, 2),
+                        TotalValue = Math.Round(line.Rate * (line.PalletQuantity ?? 0), 2),
                         CreatedDate = DateTime.Now
                     });
                 }
@@ -306,6 +311,9 @@ namespace DFN_BMS.Controllers
             if (!ValidGrnTypes.Contains(req.GrnType))
                 return BadRequest(new { message = "GRN Type must be 'Regular' or 'Sample'" });
 
+            if (!InvoiceNumberRegex.IsMatch(req.SupplierInvoiceNumber.Trim()))
+                return BadRequest(new { message = "Supplier Invoice Number must be numbers only" });
+
             if (req.Lines == null || req.Lines.Count == 0)
                 return BadRequest(new { message = "Add at least one part before saving" });
 
@@ -327,7 +335,7 @@ namespace DFN_BMS.Controllers
                     PalletQuantity = line.PalletQuantity,
                     Rate = line.Rate,
                     Quantity = line.Quantity,
-                    TotalValue = Math.Round(line.Rate * line.Quantity, 2),
+                    TotalValue = Math.Round(line.Rate * (line.PalletQuantity ?? 0), 2),
                     CreatedDate = DateTime.Now
                 });
             }
