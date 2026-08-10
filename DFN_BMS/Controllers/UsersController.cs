@@ -210,9 +210,7 @@ public class UsersController : ControllerBase
         }
     }
     [HttpPut("{id}")]
-    public async Task<IActionResult> Update(
-     int id,
-     UserMaster user)
+    public async Task<IActionResult> Update(int id,UserMaster user)
     {
         try
         {
@@ -255,11 +253,10 @@ public class UsersController : ControllerBase
             existing.EmployeeId = user.EmployeeId;
             existing.DepartmentId = user.DepartmentId;
 
-            if (!string.IsNullOrWhiteSpace(user.PasswordHash))
-            {
-                existing.PasswordHash =
-                    _enc.Encrypt(user.PasswordHash);
-            }
+            if (string.IsNullOrWhiteSpace(user.PasswordHash))
+                return BadRequest("Password is required");
+
+            existing.PasswordHash = _enc.Encrypt(user.PasswordHash);
 
             existing.ModifiedOn = DateTime.Now;
             existing.ModifiedBy = 1;

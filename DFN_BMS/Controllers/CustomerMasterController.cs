@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,6 +14,12 @@ namespace DFN_BMS.Controllers
     public class CustomerMasterController : ControllerBase
     {
         private readonly AppDbContext _context;
+
+        // 2 digits (state code) + 5 letters (PAN) + 4 digits (PAN) + 1 letter (PAN)
+        // + 1 alphanumeric (entity code) + literal 'Z' + 1 alphanumeric (checksum)
+        private static readonly Regex GstRegex =
+            new Regex(@"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$");
+        private static readonly Regex NameRegex = new Regex(@"^[A-Za-z0-9_ ]+$");
 
         public CustomerMasterController(AppDbContext context)
         {
@@ -50,10 +57,19 @@ namespace DFN_BMS.Controllers
                 string.IsNullOrWhiteSpace(model.CustomerName) ||
                 string.IsNullOrWhiteSpace(model.CustomerDivision) ||
                 string.IsNullOrWhiteSpace(model.MobileNumber) ||
-                string.IsNullOrWhiteSpace(model.EmailId))
+                string.IsNullOrWhiteSpace(model.EmailId) ||
+                string.IsNullOrWhiteSpace(model.GstNo))
             {
                 return BadRequest(new { message = "Please fill all required fields" });
             }
+
+            var gstNo = model.GstNo.Trim().ToUpper();
+
+            if (!NameRegex.IsMatch(model.CustomerName.Trim()))
+                return BadRequest(new { message = "Customer Name: only letters, numbers, underscore and spaces are allowed (e.g. Test_233)" });
+
+            if (!GstRegex.IsMatch(gstNo))
+                return BadRequest(new { message = "Enter a valid 15-character GSTIN (e.g. 33ABCDE1234F1Z5)" });
 
             var codeExists = await _context.CustomerMasters
                 .AnyAsync(x => x.CustomerCode.ToLower() == model.CustomerCode.Trim().ToLower());
@@ -73,6 +89,12 @@ namespace DFN_BMS.Controllers
             if (emailExists)
                 return BadRequest(new { message = "Email ID already exists" });
 
+            var gstExists = await _context.CustomerMasters
+                .AnyAsync(x => x.GstNo.ToLower() == gstNo.ToLower());
+
+            if (gstExists)
+                return BadRequest(new { message = "GST No already exists" });
+
             var entity = new CustomerMaster
             {
                 CustomerCode = model.CustomerCode.Trim(),
@@ -80,6 +102,7 @@ namespace DFN_BMS.Controllers
                 CustomerDivision = model.CustomerDivision.Trim(),
                 MobileNumber = model.MobileNumber.Trim(),
                 EmailId = model.EmailId.Trim(),
+                GstNo = gstNo,
                 CreatedDate = DateTime.Now
             };
 
@@ -101,10 +124,19 @@ namespace DFN_BMS.Controllers
             if (string.IsNullOrWhiteSpace(model.CustomerName) ||
                 string.IsNullOrWhiteSpace(model.CustomerDivision) ||
                 string.IsNullOrWhiteSpace(model.MobileNumber) ||
-                string.IsNullOrWhiteSpace(model.EmailId))
+                string.IsNullOrWhiteSpace(model.EmailId) ||
+                string.IsNullOrWhiteSpace(model.GstNo))
             {
                 return BadRequest(new { message = "Please fill all required fields" });
             }
+
+            var gstNo = model.GstNo.Trim().ToUpper();
+
+            if (!NameRegex.IsMatch(model.CustomerName.Trim()))
+                return BadRequest(new { message = "Customer Name: only letters, numbers, underscore and spaces are allowed (e.g. Test_233)" });
+
+            if (!GstRegex.IsMatch(gstNo))
+                return BadRequest(new { message = "Enter a valid 15-character GSTIN (e.g. 33ABCDE1234F1Z5)" });
 
             var nameExists = await _context.CustomerMasters
                 .AnyAsync(x => x.CustomerName.ToLower() == model.CustomerName.Trim().ToLower() && x.Id != id);
@@ -118,10 +150,17 @@ namespace DFN_BMS.Controllers
             if (emailExists)
                 return BadRequest(new { message = "Email ID already exists" });
 
+            var gstExists = await _context.CustomerMasters
+                .AnyAsync(x => x.GstNo.ToLower() == gstNo.ToLower() && x.Id != id);
+
+            if (gstExists)
+                return BadRequest(new { message = "GST No already exists" });
+
             entity.CustomerName = model.CustomerName.Trim();
             entity.CustomerDivision = model.CustomerDivision.Trim();
             entity.MobileNumber = model.MobileNumber.Trim();
             entity.EmailId = model.EmailId.Trim();
+            entity.GstNo = gstNo;
             entity.ModifiedDate = DateTime.Now;
             // Note: CustomerCode is intentionally never changed on update.
 

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,6 +14,11 @@ namespace DFN_BMS.Controllers
     public class SupplierMasterController : ControllerBase
     {
         private readonly AppDbContext _context;
+
+        private static readonly Regex ContactRegex = new Regex(@"^[0-9]{10}$");
+        private static readonly Regex GstRegex =
+            new Regex(@"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$");
+        private static readonly Regex PanRegex = new Regex(@"^[A-Z]{5}[0-9]{4}[A-Z]{1}$");
 
         public SupplierMasterController(AppDbContext context)
         {
@@ -39,11 +45,13 @@ namespace DFN_BMS.Controllers
                     x.PersonToContact,
                     x.GstNo,
                     x.PanNo,
+                    x.BillingCompanyName,
                     x.BillingAddressLine1,
                     x.BillingAddressLine2,
                     x.BillingState,
                     x.BillingStateCode,
                     x.BillingPinCode,
+                    x.ShippingCompanyName,
                     x.ShippingAddressLine1,
                     x.ShippingAddressLine2,
                     x.ShippingState,
@@ -67,39 +75,13 @@ namespace DFN_BMS.Controllers
             return Ok(item);
         }
 
-        // GET: api/SupplierMaster/next-number
-        [HttpGet("next-number")]
-        public async Task<IActionResult> GetNextNumber()
+        private static readonly Regex EmailRegex = new Regex(@"^[^\s@]+@[^\s@]+\.[^\s@]+$");
+        private static readonly Regex PincodeRegex = new Regex(@"^[0-9]{6}$");
+
+        private IActionResult ValidateSupplierFields(SupplierMaster model, int? excludeId = null)
         {
-            var number = await GenerateSupplierCodeAsync();
-            return Ok(new { supplierCode = number });
-        }
-
-        private async Task<string> GenerateSupplierCodeAsync()
-        {
-            var lastSupplier = await _context.SupplierMasters
-                .OrderByDescending(x => x.Id)
-                .FirstOrDefaultAsync();
-
-            int nextSeq = 1;
-
-            if (lastSupplier != null && lastSupplier.SupplierCode.StartsWith("SUP-"))
-            {
-                var numericPart = lastSupplier.SupplierCode.Substring(4);
-                if (int.TryParse(numericPart, out int lastSeq))
-                {
-                    nextSeq = lastSeq + 1;
-                }
-            }
-
-            return $"SUP-{nextSeq:D4}";
-        }
-
-        // POST: api/SupplierMaster
-        [HttpPost]
-        public async Task<IActionResult> Create([FromBody] SupplierMaster model)
-        {
-            if (string.IsNullOrWhiteSpace(model.SupplierName) ||
+            if (string.IsNullOrWhiteSpace(model.SupplierCode) ||
+                string.IsNullOrWhiteSpace(model.SupplierName) ||
                 string.IsNullOrWhiteSpace(model.VendorCode) ||
                 model.SupplierGroupId <= 0 ||
                 string.IsNullOrWhiteSpace(model.Email) ||
@@ -107,10 +89,12 @@ namespace DFN_BMS.Controllers
                 string.IsNullOrWhiteSpace(model.PersonToContact) ||
                 string.IsNullOrWhiteSpace(model.GstNo) ||
                 string.IsNullOrWhiteSpace(model.PanNo) ||
+                string.IsNullOrWhiteSpace(model.BillingCompanyName) ||
                 string.IsNullOrWhiteSpace(model.BillingAddressLine1) ||
                 string.IsNullOrWhiteSpace(model.BillingState) ||
                 string.IsNullOrWhiteSpace(model.BillingStateCode) ||
                 string.IsNullOrWhiteSpace(model.BillingPinCode) ||
+                string.IsNullOrWhiteSpace(model.ShippingCompanyName) ||
                 string.IsNullOrWhiteSpace(model.ShippingAddressLine1) ||
                 string.IsNullOrWhiteSpace(model.ShippingState) ||
                 string.IsNullOrWhiteSpace(model.ShippingStateCode) ||
@@ -119,9 +103,44 @@ namespace DFN_BMS.Controllers
                 return BadRequest(new { message = "Please fill all required fields" });
             }
 
+            if (!ContactRegex.IsMatch(model.ContactNumber.Trim()))
+                return BadRequest(new { message = "Contact Number must be exactly 10 digits" });
+
+            if (!EmailRegex.IsMatch(model.Email.Trim()))
+                return BadRequest(new { message = "Enter a valid email address" });
+
+            if (!PincodeRegex.IsMatch(model.BillingPinCode.Trim()))
+                return BadRequest(new { message = "Billing Pin Code must be exactly 6 digits" });
+
+            if (!PincodeRegex.IsMatch(model.ShippingPinCode.Trim()))
+                return BadRequest(new { message = "Shipping Pin Code must be exactly 6 digits" });
+
+            if (!GstRegex.IsMatch(model.GstNo.Trim().ToUpper()))
+                return BadRequest(new { message = "Enter a valid 15-character GSTIN (e.g. 33ABCDE1234F1Z5)" });
+
+            if (!PanRegex.IsMatch(model.PanNo.Trim().ToUpper()))
+                return BadRequest(new { message = "Enter a valid 10-character PAN (e.g. ABCDE1234F)" });
+
+            return null;
+        }
+
+        // POST: api/SupplierMaster
+        [HttpPost]
+        public async Task<IActionResult> Create([FromBody] SupplierMaster model)
+        {
+            var validationResult = ValidateSupplierFields(model);
+            if (validationResult != null)
+                return validationResult;
+
             var groupExists = await _context.SupplierGroupMasters.AnyAsync(g => g.Id == model.SupplierGroupId);
             if (!groupExists)
                 return BadRequest(new { message = "Selected Supplier Group does not exist" });
+
+            var codeExists = await _context.SupplierMasters
+                .AnyAsync(x => x.SupplierCode.ToLower() == model.SupplierCode.Trim().ToLower());
+
+            if (codeExists)
+                return BadRequest(new { message = "Supplier ID already exists" });
 
             var nameExists = await _context.SupplierMasters
                 .AnyAsync(x => x.SupplierName.ToLower() == model.SupplierName.Trim().ToLower());
@@ -137,7 +156,7 @@ namespace DFN_BMS.Controllers
 
             var entity = new SupplierMaster
             {
-                SupplierCode = await GenerateSupplierCodeAsync(),
+                SupplierCode = model.SupplierCode.Trim(),
                 SupplierName = model.SupplierName.Trim(),
                 VendorCode = model.VendorCode.Trim(),
                 SupplierGroupId = model.SupplierGroupId,
@@ -146,11 +165,13 @@ namespace DFN_BMS.Controllers
                 PersonToContact = model.PersonToContact.Trim(),
                 GstNo = model.GstNo.Trim().ToUpper(),
                 PanNo = model.PanNo.Trim().ToUpper(),
+                BillingCompanyName = model.BillingCompanyName.Trim(),
                 BillingAddressLine1 = model.BillingAddressLine1.Trim(),
                 BillingAddressLine2 = model.BillingAddressLine2?.Trim(),
                 BillingState = model.BillingState.Trim(),
                 BillingStateCode = model.BillingStateCode.Trim(),
                 BillingPinCode = model.BillingPinCode.Trim(),
+                ShippingCompanyName = model.ShippingCompanyName.Trim(),
                 ShippingAddressLine1 = model.ShippingAddressLine1.Trim(),
                 ShippingAddressLine2 = model.ShippingAddressLine2?.Trim(),
                 ShippingState = model.ShippingState.Trim(),
@@ -174,25 +195,9 @@ namespace DFN_BMS.Controllers
             if (entity == null)
                 return NotFound(new { message = "Supplier not found" });
 
-            if (string.IsNullOrWhiteSpace(model.SupplierName) ||
-                string.IsNullOrWhiteSpace(model.VendorCode) ||
-                model.SupplierGroupId <= 0 ||
-                string.IsNullOrWhiteSpace(model.Email) ||
-                string.IsNullOrWhiteSpace(model.ContactNumber) ||
-                string.IsNullOrWhiteSpace(model.PersonToContact) ||
-                string.IsNullOrWhiteSpace(model.GstNo) ||
-                string.IsNullOrWhiteSpace(model.PanNo) ||
-                string.IsNullOrWhiteSpace(model.BillingAddressLine1) ||
-                string.IsNullOrWhiteSpace(model.BillingState) ||
-                string.IsNullOrWhiteSpace(model.BillingStateCode) ||
-                string.IsNullOrWhiteSpace(model.BillingPinCode) ||
-                string.IsNullOrWhiteSpace(model.ShippingAddressLine1) ||
-                string.IsNullOrWhiteSpace(model.ShippingState) ||
-                string.IsNullOrWhiteSpace(model.ShippingStateCode) ||
-                string.IsNullOrWhiteSpace(model.ShippingPinCode))
-            {
-                return BadRequest(new { message = "Please fill all required fields" });
-            }
+            var validationResult = ValidateSupplierFields(model, id);
+            if (validationResult != null)
+                return validationResult;
 
             var groupExists = await _context.SupplierGroupMasters.AnyAsync(g => g.Id == model.SupplierGroupId);
             if (!groupExists)
@@ -218,11 +223,13 @@ namespace DFN_BMS.Controllers
             entity.PersonToContact = model.PersonToContact.Trim();
             entity.GstNo = model.GstNo.Trim().ToUpper();
             entity.PanNo = model.PanNo.Trim().ToUpper();
+            entity.BillingCompanyName = model.BillingCompanyName.Trim();
             entity.BillingAddressLine1 = model.BillingAddressLine1.Trim();
             entity.BillingAddressLine2 = model.BillingAddressLine2?.Trim();
             entity.BillingState = model.BillingState.Trim();
             entity.BillingStateCode = model.BillingStateCode.Trim();
             entity.BillingPinCode = model.BillingPinCode.Trim();
+            entity.ShippingCompanyName = model.ShippingCompanyName.Trim();
             entity.ShippingAddressLine1 = model.ShippingAddressLine1.Trim();
             entity.ShippingAddressLine2 = model.ShippingAddressLine2?.Trim();
             entity.ShippingState = model.ShippingState.Trim();

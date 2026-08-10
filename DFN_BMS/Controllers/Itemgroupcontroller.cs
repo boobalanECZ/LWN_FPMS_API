@@ -46,14 +46,8 @@ namespace DFN_BMS.Controllers
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] ItemGroupMaster model)
         {
-            if (string.IsNullOrWhiteSpace(model.GroupCode) || string.IsNullOrWhiteSpace(model.GroupName))
-                return BadRequest(new { message = "Group Code and Group Name are required" });
-
-            var codeExists = await _context.ItemGroupMasters
-                .AnyAsync(x => x.GroupCode.ToLower() == model.GroupCode.Trim().ToLower());
-
-            if (codeExists)
-                return BadRequest(new { message = "Group Code already exists" });
+            if (string.IsNullOrWhiteSpace(model.GroupName))
+                return BadRequest(new { message = "Group Name is required" });
 
             var nameExists = await _context.ItemGroupMasters
                 .AnyAsync(x => x.GroupName.ToLower() == model.GroupName.Trim().ToLower());
@@ -63,7 +57,6 @@ namespace DFN_BMS.Controllers
 
             var entity = new ItemGroupMaster
             {
-                GroupCode = model.GroupCode.Trim(),
                 GroupName = model.GroupName.Trim(),
                 Description = model.Description?.Trim(),
                 IsActive = model.IsActive,
@@ -85,14 +78,8 @@ namespace DFN_BMS.Controllers
             if (entity == null)
                 return NotFound(new { message = "Item Group not found" });
 
-            if (string.IsNullOrWhiteSpace(model.GroupCode) || string.IsNullOrWhiteSpace(model.GroupName))
-                return BadRequest(new { message = "Group Code and Group Name are required" });
-
-            var codeExists = await _context.ItemGroupMasters
-                .AnyAsync(x => x.GroupCode.ToLower() == model.GroupCode.Trim().ToLower() && x.Id != id);
-
-            if (codeExists)
-                return BadRequest(new { message = "Group Code already exists" });
+            if (string.IsNullOrWhiteSpace(model.GroupName))
+                return BadRequest(new { message = "Group Name is required" });
 
             var nameExists = await _context.ItemGroupMasters
                 .AnyAsync(x => x.GroupName.ToLower() == model.GroupName.Trim().ToLower() && x.Id != id);
@@ -100,7 +87,7 @@ namespace DFN_BMS.Controllers
             if (nameExists)
                 return BadRequest(new { message = "Group Name already exists" });
 
-            entity.GroupCode = model.GroupCode.Trim();
+           
             entity.GroupName = model.GroupName.Trim();
             entity.Description = model.Description?.Trim();
             entity.IsActive = model.IsActive;
