@@ -33,5 +33,6 @@ namespace DFN_BMS.DB
         public DbSet<StoreMovement> StoreMovements { get; set; }
         public DbSet<PalletTypeMaster> PalletTypeMasters { get; set; }
         public DbSet<GrnCounter> GrnCounters { get; set; }
+        public DbSet<MaterialIssue> MaterialIssues { get; set; }
     }
 }

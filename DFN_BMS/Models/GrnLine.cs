@@ -12,13 +12,14 @@ namespace DFN_BMS.Models
         public int Id { get; set; }
 
         [Required]
-        public int GrnHeaderId { get; set; }   
+        public int GrnHeaderId { get; set; }   // FK -> GrnHeader.Id
+
         [ForeignKey("GrnHeaderId")]
         [ValidateNever]
         public GrnHeader? Header { get; set; }
 
         [Required]
-        public int ItemId { get; set; }   
+        public int ItemId { get; set; }   // FK -> ItemMaster.Id (Part Number)
 
         [ForeignKey("ItemId")]
         [ValidateNever]
@@ -41,6 +42,17 @@ namespace DFN_BMS.Models
         [Required]
         [Column(TypeName = "decimal(18,2)")]
         public decimal TotalValue { get; set; }
+
+        // ---------- Per-line posting / FIFO label fields ----------
+        public bool IsPosted { get; set; } = false;
+
+        public DateTime? PostedDate { get; set; }
+
+        [MaxLength(30)]
+        public string? PalletNo { get; set; }        // e.g. EX-09, assigned on Post
+
+        [MaxLength(30)]
+        public string? FifoPalletNo { get; set; }     // e.g. F25070001, assigned on Post
 
         public DateTime CreatedDate { get; set; } = DateTime.Now;
     }
