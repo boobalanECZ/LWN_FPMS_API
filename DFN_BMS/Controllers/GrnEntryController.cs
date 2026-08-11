@@ -47,8 +47,10 @@ namespace DFN_BMS.Controllers
         }
 
         // GET: api/GrnEntry?posted=false
-        // posted omitted -> everything. posted=false -> "Show All GRN Post"
-        // tab (awaiting posting). posted=true -> "GRN Reprint" tab.
+        // posted omitted -> everything. posted=false -> GRNs that still
+        // have at least one un-posted line ("Show All GRN Post" tab).
+        // posted=true -> GRNs with at least one posted line ("GRN
+        // Reprint" tab). Posting now happens per-line, not per-header.
         [HttpGet]
         public async Task<IActionResult> GetAll([FromQuery] bool? posted)
         {
@@ -58,7 +60,11 @@ namespace DFN_BMS.Controllers
                 .AsQueryable();
 
             if (posted.HasValue)
-                query = query.Where(x => x.IsPosted == posted.Value);
+            {
+                query = posted.Value
+                    ? query.Where(x => x.Lines.Any(l => l.IsPosted))
+                    : query.Where(x => x.Lines.Any(l => !l.IsPosted));
+            }
 
             var list = await query
                 .OrderByDescending(x => x.Id)
@@ -72,11 +78,8 @@ namespace DFN_BMS.Controllers
                     x.PoNumber,
                     x.PoDate,
                     x.GrnType,
-                    x.IsPosted,
-                    x.PostedDate,
-                    x.PalletNo,
-                    x.FifoPalletNo,
                     LineCount = x.Lines.Count,
+                    PostedLineCount = x.Lines.Count(l => l.IsPosted),
                     TotalQuantity = x.Lines.Sum(l => l.Quantity),
                     TotalValue = x.Lines.Sum(l => l.TotalValue)
                 })
@@ -119,7 +122,11 @@ namespace DFN_BMS.Controllers
                         l.PalletQuantity,
                         l.Rate,
                         l.Quantity,
-                        l.TotalValue
+                        l.TotalValue,
+                        l.IsPosted,
+                        l.PostedDate,
+                        l.PalletNo,
+                        l.FifoPalletNo
                     })
                 })
                 .FirstOrDefaultAsync();
@@ -234,6 +241,8 @@ namespace DFN_BMS.Controllers
                         return BadRequest(new { message = "Rate must be greater than 0" });
                     if (line.Quantity <= 0)
                         return BadRequest(new { message = "Quantity must be greater than 0" });
+                    if (line.PalletQuantity.HasValue && line.PalletQuantity.Value > line.Quantity)
+                        return BadRequest(new { message = $"Pallet Quantity cannot be greater than Quantity for Part Number (Item Id {line.ItemId})" });
 
                     var itemExists = await _context.ItemMasters.AnyAsync(x => x.Id == line.ItemId);
                     if (!itemExists)
@@ -317,6 +326,18 @@ namespace DFN_BMS.Controllers
             if (req.Lines == null || req.Lines.Count == 0)
                 return BadRequest(new { message = "Add at least one part before saving" });
 
+            foreach (var line in req.Lines)
+            {
+                if (line.ItemId <= 0)
+                    return BadRequest(new { message = "Each line needs a valid Part Number" });
+                if (line.Rate <= 0)
+                    return BadRequest(new { message = "Rate must be greater than 0" });
+                if (line.Quantity <= 0)
+                    return BadRequest(new { message = "Quantity must be greater than 0" });
+                if (line.PalletQuantity.HasValue && line.PalletQuantity.Value > line.Quantity)
+                    return BadRequest(new { message = $"Pallet Quantity cannot be greater than Quantity for Part Number (Item Id {line.ItemId})" });
+            }
+
             header.SupplierId = req.SupplierId;
             header.PoNumber = req.PoNumber.Trim();
             header.PoDate = req.PoDate;
@@ -345,62 +366,100 @@ namespace DFN_BMS.Controllers
             return Ok(new { header.Id, header.GrnNumber });
         }
 
-        // PUT: api/GrnEntry/5/post
-        // Marks the GRN as posted and assigns Pallet No / FIFO Pallet No.
-        [HttpPut("{id}/post")]
-        public async Task<IActionResult> Post(int id)
+        // PUT: api/GrnEntry/line/5/post
+        // Marks a single GRN line ("item-wise" posting) as posted and
+        // assigns it its own Pallet No / FIFO Pallet No, independent of
+        // any other line on the same GRN.
+        [HttpPut("line/{lineId}/post")]
+        public async Task<IActionResult> PostLine(int lineId)
         {
-            var header = await _context.GrnHeaders.FindAsync(id);
+            try
+            {
+                var line = await _context.GrnLines
+                    .Include(l => l.Item)
+                    .Include(l => l.Header)
+                        .ThenInclude(h => h.Supplier)
+                    .FirstOrDefaultAsync(l => l.Id == lineId);
 
-            if (header == null)
-                return NotFound(new { message = "GRN not found" });
+                if (line == null)
+                    return NotFound(new { message = "GRN line not found" });
 
-            if (header.IsPosted)
-                return BadRequest(new { message = "GRN is already posted" });
+                if (line.IsPosted)
+                    return BadRequest(new { message = "This item is already posted" });
 
-            header.IsPosted = true;
-            header.PostedDate = DateTime.Now;
-            header.PalletNo = await GenerateNextCodeAsync(x => x.PalletNo, "EX-", 2);
-            header.FifoPalletNo = await GenerateFifoPalletNoAsync();
+                line.IsPosted = true;
+                line.PostedDate = DateTime.Now;
+                line.PalletNo = await GenerateNextLinePalletNoAsync();
+                line.FifoPalletNo = await GenerateLineFifoPalletNoAsync();
 
-            await _context.SaveChangesAsync();
+                await _context.SaveChangesAsync();
 
-            return Ok(new { header.Id, header.PalletNo, header.FifoPalletNo });
+                return Ok(new { line.Id, line.PalletNo, line.FifoPalletNo });
+            }
+            catch (Exception ex)
+            {
+                var detail = ex.InnerException?.Message ?? ex.Message;
+                return StatusCode(500, new { message = $"Post failed: {detail}" });
+            }
         }
 
-        private async Task<string> GenerateNextCodeAsync(
-            System.Linq.Expressions.Expression<Func<GrnHeader, string?>> selector,
-            string prefix,
-            int padWidth)
+        // DELETE: api/GrnEntry/line/5
+        // Deletes a single GRN line. Blocked once that line is posted —
+        // same reasoning as blocking edits on posted data elsewhere.
+        [HttpDelete("line/{lineId}")]
+        public async Task<IActionResult> DeleteLine(int lineId)
         {
-            var compiled = selector.Compile();
+            try
+            {
+                var line = await _context.GrnLines.FindAsync(lineId);
 
-            var last = await _context.GrnHeaders
-                .Where(x => x.PalletNo != null && x.PalletNo.StartsWith(prefix))
-                .OrderByDescending(x => x.Id)
+                if (line == null)
+                    return NotFound(new { message = "GRN line not found" });
+
+                if (line.IsPosted)
+                    return BadRequest(new { message = "A posted item cannot be deleted" });
+
+                _context.GrnLines.Remove(line);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Deleted Successfully" });
+            }
+            catch (Exception ex)
+            {
+                var detail = ex.InnerException?.Message ?? ex.Message;
+                return StatusCode(500, new { message = $"Delete failed: {detail}" });
+            }
+        }
+
+        private async Task<string> GenerateNextLinePalletNoAsync()
+        {
+            const string prefix = "EX-";
+
+            var last = await _context.GrnLines
+                .Where(l => l.PalletNo != null && l.PalletNo.StartsWith(prefix))
+                .OrderByDescending(l => l.Id)
                 .FirstOrDefaultAsync();
 
             int nextSeq = 1;
 
-            if (last != null)
+            if (last?.PalletNo != null)
             {
-                var value = compiled(last);
-                if (value != null && int.TryParse(value.Substring(prefix.Length), out int lastSeq))
+                if (int.TryParse(last.PalletNo.Substring(prefix.Length), out int lastSeq))
                     nextSeq = lastSeq + 1;
             }
 
-            return $"{prefix}{nextSeq.ToString().PadLeft(padWidth, '0')}";
+            return $"{prefix}{nextSeq:D2}";
         }
 
-        private async Task<string> GenerateFifoPalletNoAsync()
+        private async Task<string> GenerateLineFifoPalletNoAsync()
         {
             // e.g. F25070001 -> F + YY + MM + 4-digit sequence for that month
             var now = DateTime.Now;
             var prefix = $"F{now:yyMM}";
 
-            var last = await _context.GrnHeaders
-                .Where(x => x.FifoPalletNo != null && x.FifoPalletNo.StartsWith(prefix))
-                .OrderByDescending(x => x.Id)
+            var last = await _context.GrnLines
+                .Where(l => l.FifoPalletNo != null && l.FifoPalletNo.StartsWith(prefix))
+                .OrderByDescending(l => l.Id)
                 .FirstOrDefaultAsync();
 
             int nextSeq = 1;
@@ -415,21 +474,32 @@ namespace DFN_BMS.Controllers
         }
 
         // DELETE: api/GrnEntry/5
+        // Deleting cascades (at the DB level) through GRN_LINE ->
+        // GRN_PALLET -> STORE_MOVEMENT, so this also removes any pallets
+        // and store-stuffing records tied to this GRN. Requires the FK
+        // cascade fix in AlterStoreMovement_CascadeDeletes.sql — without
+        // it, deleting a posted GRN whose pallets have been stuffed
+        // somewhere will fail with a SQL FK conflict.
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
         {
-            var entity = await _context.GrnHeaders.FindAsync(id);
+            try
+            {
+                var entity = await _context.GrnHeaders.FindAsync(id);
 
-            if (entity == null)
-                return NotFound(new { message = "GRN not found" });
+                if (entity == null)
+                    return NotFound(new { message = "GRN not found" });
 
-            if (entity.IsPosted)
-                return BadRequest(new { message = "A posted GRN cannot be deleted" });
+                _context.GrnHeaders.Remove(entity);
+                await _context.SaveChangesAsync();
 
-            _context.GrnHeaders.Remove(entity);
-            await _context.SaveChangesAsync();
-
-            return Ok(new { message = "Deleted Successfully" });
+                return Ok(new { message = "Deleted Successfully" });
+            }
+            catch (Exception ex)
+            {
+                var detail = ex.InnerException?.Message ?? ex.Message;
+                return StatusCode(500, new { message = $"Delete failed: {detail}" });
+            }
         }
     }
 }
