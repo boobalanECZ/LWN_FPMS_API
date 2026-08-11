@@ -108,6 +108,8 @@ namespace DFN_BMS.Controllers
         }
 
         // GET: api/StoreMovement/positions
+        // Kept for backward compatibility with the old simplified P1/P2
+        // model — no longer used by the frontend's Select Pallet screen.
         [HttpGet("positions")]
         public async Task<IActionResult> GetPositions()
         {
@@ -153,6 +155,133 @@ namespace DFN_BMS.Controllers
             {
                 var detail = ex.InnerException?.Message ?? ex.Message;
                 return StatusCode(500, new { message = $"Failed to load store positions: {detail}" });
+            }
+        }
+
+        // GET: api/StoreMovement/rack-slots
+        // Returns the REAL Location Master hierarchy — every Store, its
+        // actual Racks/Columns/Rows (whatever exists, nothing hardcoded),
+        // with each row's Front/Rear slots (derived from Fixture, same
+        // odd/even numbering as the Location Master preview) flagged as
+        // occupied or available based on real StoreMovement records.
+        [HttpGet("rack-slots")]
+        public async Task<IActionResult> GetRackSlots()
+        {
+            try
+            {
+                var stores = await _context.LocationMasters
+                    .Include(x => x.StoreMaster)
+                    .Include(x => x.Racks)
+                        .ThenInclude(r => r.Columns)
+                            .ThenInclude(c => c.Rows)
+                    .Select(store => new
+                    {
+                        store.Id,
+                        store.StoreCode,
+                        StoreLocation = store.StoreMaster.StoreLocation,
+                        Racks = store.Racks.Select(rack => new
+                        {
+                            rack.Id,
+                            rack.RackNo,
+                            Columns = rack.Columns.Select(col => new
+                            {
+                                col.Id,
+                                col.ColumnNo,
+                                Rows = col.Rows.Select(row => new
+                                {
+                                    row.Id,
+                                    row.RowNo,
+                                    row.HasFront,
+                                    row.HasRear,
+                                    row.Fixture,
+                                    OccupiedSlots = _context.StoreMovements
+                                        .Where(m => m.RackRowId == row.Id)
+                                        .Select(m => new { m.SlotNumber, m.Side, m.Quantity, m.Id, m.GrnPalletId })
+                                        .ToList()
+                                }).ToList()
+                            }).ToList()
+                        }).ToList()
+                    })
+                    .ToListAsync();
+
+                return Ok(stores);
+            }
+            catch (Exception ex)
+            {
+                var detail = ex.InnerException?.Message ?? ex.Message;
+                return StatusCode(500, new { message = $"Failed to load rack slots: {detail}" });
+            }
+        }
+
+        // POST: api/StoreMovement/stuff-rack-slot
+        // Stuffs a specific GrnPallet into a specific real Rack Row +
+        // Slot Number + Side (the dynamic replacement for the old
+        // stuff-into-P1/P2 action).
+        public class StuffRackSlotRequest
+        {
+            public int GrnPalletId { get; set; }
+            public int RackRowId { get; set; }
+            public int SlotNumber { get; set; }
+            public string Side { get; set; } = "Front";
+            public decimal Quantity { get; set; }
+        }
+
+        [HttpPost("stuff-rack-slot")]
+        public async Task<IActionResult> StuffRackSlot([FromBody] StuffRackSlotRequest req)
+        {
+            try
+            {
+                if (req == null || req.GrnPalletId <= 0 || req.RackRowId <= 0 || req.SlotNumber <= 0)
+                    return BadRequest(new { message = "Pallet, Rack Row and Slot Number are required" });
+
+                if (req.Side != "Front" && req.Side != "Rear")
+                    return BadRequest(new { message = "Side must be 'Front' or 'Rear'" });
+
+                if (req.Quantity <= 0)
+                    return BadRequest(new { message = "Quantity must be greater than 0" });
+
+                var pallet = await _context.GrnPallets.FindAsync(req.GrnPalletId);
+                if (pallet == null)
+                    return BadRequest(new { message = "Pallet not found" });
+
+                var row = await _context.RackRows.FindAsync(req.RackRowId);
+                if (row == null)
+                    return BadRequest(new { message = "Rack Row not found" });
+
+                var alreadyStuffed = await _context.StoreMovements
+                    .Where(m => m.GrnPalletId == req.GrnPalletId)
+                    .SumAsync(m => (decimal?)m.Quantity) ?? 0;
+
+                var remaining = pallet.Quantity - alreadyStuffed;
+
+                if (req.Quantity > remaining)
+                    return BadRequest(new { message = $"Only {remaining} remaining on this pallet" });
+
+                var slotOccupied = await _context.StoreMovements
+                    .AnyAsync(m => m.RackRowId == req.RackRowId && m.SlotNumber == req.SlotNumber && m.Side == req.Side);
+
+                if (slotOccupied)
+                    return BadRequest(new { message = "That slot is already occupied" });
+
+                var movement = new StoreMovement
+                {
+                    GrnPalletId = req.GrnPalletId,
+                    RackRowId = req.RackRowId,
+                    SlotNumber = req.SlotNumber,
+                    Side = req.Side,
+                    Quantity = req.Quantity,
+                    MovementDate = DateTime.Now
+                };
+
+                _context.StoreMovements.Add(movement);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { movement.Id, message = "Stuffed Successfully" });
+            }
+            catch (Exception ex)
+            {
+                var detail = ex.InnerException?.Message ?? ex.Message;
+                return StatusCode(500, new { message = $"Stuff failed: {detail}" });
             }
         }
 
