@@ -29,11 +29,9 @@ namespace DFN_BMS.Controllers
                 var totalCustomers = await _context.CustomerMasters.CountAsync();
                 var totalStores = await _context.StoreMasters.CountAsync();
                 var totalGrns = await _context.GrnHeaders.CountAsync();
-
                 var totalLines = await _context.GrnLines.CountAsync();
                 var postedLines = await _context.GrnLines.CountAsync(l => l.IsPosted);
                 var unpostedLines = totalLines - postedLines;
-
                 var totalStockValue = await _context.GrnLines.SumAsync(l => (decimal?)l.TotalValue) ?? 0;
                 var postedStockValue = await _context.GrnLines
                     .Where(l => l.IsPosted)
@@ -41,7 +39,6 @@ namespace DFN_BMS.Controllers
 
                 var today = DateTime.Today;
                 var last7Days = today.AddDays(-6);
-
                 // GRN count per day for the last 7 days, for a simple trend chart.
                 var recentHeaders = await _context.GrnHeaders
                     .Where(x => x.PoDate >= last7Days)

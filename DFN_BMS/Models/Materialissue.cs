@@ -38,6 +38,12 @@ namespace DFN_BMS.Models
         [MaxLength(100)]
         public string? StoreLocation { get; set; }
 
+        [MaxLength(30)]
+        public string? PalletNo { get; set; }     // which pallet this came from, if known
+
+        [MaxLength(30)]
+        public string? GrnNumber { get; set; }    // GRN this pallet came from, from the scanned QR code
+
         [MaxLength(250)]
         public string? Remarks { get; set; }
 
