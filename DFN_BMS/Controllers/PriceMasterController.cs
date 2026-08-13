@@ -14,11 +14,31 @@ namespace DFN_BMS.Controllers
     {
         private readonly AppDbContext _context;
 
-        private static readonly string[] ValidTypes = { "Customer", "Supplier" };
-
         public PriceMasterController(AppDbContext context)
         {
             _context = context;
+        }
+
+        // GET: api/PriceMaster/parts-list
+        // Feeds the Part Number dropdown on the Price Master form.
+        // The frontend uses the label (which already contains the
+        // Part Name) to auto-fill Part Name on selection — no extra
+        // round-trip needed.
+        [HttpGet("parts-list")]
+        public async Task<IActionResult> GetPartsList()
+        {
+            var data = await _context.ItemMasters
+                .Select(x => new
+                {
+                    value = x.Id,
+                    partNumber = x.ItemNumber,
+                    partName = x.ItemName,
+                    label = $"{x.ItemNumber} - {x.ItemName}"
+                })
+                .OrderBy(x => x.partNumber)
+                .ToListAsync();
+
+            return Ok(data);
         }
 
         // GET: api/PriceMaster
@@ -32,9 +52,8 @@ namespace DFN_BMS.Controllers
                 {
                     x.Id,
                     x.PartNumberId,
-                    PartNumberText = x.PartNumber.ItemNumber,
-                    ItemName = x.PartNumber.ItemName,
-                    x.GroupCode,
+                    PartNumberCode = x.PartNumber.ItemNumber,
+                    PartName = x.PartNumber.ItemName,
                     x.CustomerOrSupplier,
                     x.Rate,
                     x.EffectiveDate
@@ -48,7 +67,20 @@ namespace DFN_BMS.Controllers
         [HttpGet("{id}")]
         public async Task<IActionResult> GetById(int id)
         {
-            var item = await _context.PriceMasters.FindAsync(id);
+            var item = await _context.PriceMasters
+                .Include(x => x.PartNumber)
+                .Where(x => x.Id == id)
+                .Select(x => new
+                {
+                    x.Id,
+                    x.PartNumberId,
+                    PartNumberCode = x.PartNumber.ItemNumber,
+                    PartName = x.PartNumber.ItemName,
+                    x.CustomerOrSupplier,
+                    x.Rate,
+                    x.EffectiveDate
+                })
+                .FirstOrDefaultAsync();
 
             if (item == null)
                 return NotFound(new { message = "Price record not found" });
@@ -60,16 +92,13 @@ namespace DFN_BMS.Controllers
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] PriceMaster model)
         {
+            // NOTE: GroupCode intentionally not validated/required anymore.
             if (model.PartNumberId <= 0 ||
-                string.IsNullOrWhiteSpace(model.GroupCode) ||
                 string.IsNullOrWhiteSpace(model.CustomerOrSupplier) ||
-                model.EffectiveDate == default)
+                model.Rate <= 0)
             {
-                return BadRequest(new { message = "Please fill all required fields" });
+                return BadRequest(new { message = "Part Number, Customer/Supplier and Rate are required" });
             }
-
-            if (!ValidTypes.Contains(model.CustomerOrSupplier))
-                return BadRequest(new { message = "Customer/Supplier must be 'Customer' or 'Supplier'" });
 
             var partExists = await _context.ItemMasters.AnyAsync(x => x.Id == model.PartNumberId);
             if (!partExists)
@@ -78,10 +107,9 @@ namespace DFN_BMS.Controllers
             var entity = new PriceMaster
             {
                 PartNumberId = model.PartNumberId,
-                GroupCode = model.GroupCode.Trim(),
-                CustomerOrSupplier = model.CustomerOrSupplier,
+                CustomerOrSupplier = model.CustomerOrSupplier.Trim(),
                 Rate = model.Rate,
-                EffectiveDate = model.EffectiveDate,
+                EffectiveDate = model.EffectiveDate == default ? DateTime.Now : model.EffectiveDate,
                 CreatedDate = DateTime.Now
             };
 
@@ -101,23 +129,18 @@ namespace DFN_BMS.Controllers
                 return NotFound(new { message = "Price record not found" });
 
             if (model.PartNumberId <= 0 ||
-                string.IsNullOrWhiteSpace(model.GroupCode) ||
                 string.IsNullOrWhiteSpace(model.CustomerOrSupplier) ||
-                model.EffectiveDate == default)
+                model.Rate <= 0)
             {
-                return BadRequest(new { message = "Please fill all required fields" });
+                return BadRequest(new { message = "Part Number, Customer/Supplier and Rate are required" });
             }
-
-            if (!ValidTypes.Contains(model.CustomerOrSupplier))
-                return BadRequest(new { message = "Customer/Supplier must be 'Customer' or 'Supplier'" });
 
             var partExists = await _context.ItemMasters.AnyAsync(x => x.Id == model.PartNumberId);
             if (!partExists)
                 return BadRequest(new { message = "Selected Part Number does not exist" });
 
             entity.PartNumberId = model.PartNumberId;
-            entity.GroupCode = model.GroupCode.Trim();
-            entity.CustomerOrSupplier = model.CustomerOrSupplier;
+            entity.CustomerOrSupplier = model.CustomerOrSupplier.Trim();
             entity.Rate = model.Rate;
             entity.EffectiveDate = model.EffectiveDate;
             entity.ModifiedDate = DateTime.Now;

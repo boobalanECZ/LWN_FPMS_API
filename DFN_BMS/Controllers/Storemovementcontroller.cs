@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
@@ -17,6 +18,94 @@ namespace DFN_BMS.Controllers
         public StoreMovementController(AppDbContext context)
         {
             _context = context;
+        }
+
+        // GET: api/StoreMovement/available-pallets
+        //
+        // Returns every pallet that has actually been stuffed into the store
+        // (i.e. has at least one STORE_MOVEMENT record), joined back through
+        // GRN_PALLET -> GRN_LINE -> GRN_HEADER, EXCLUDING any pallet that
+        // already has a MaterialIssue record.
+        //
+        // FIX (this version): previously this list never excluded
+        // already-issued pallets, so P001 kept coming back as "available"
+        // forever, even after being Issued and synced. The server is now
+        // the source of truth for what's actually still in stock.
+        [HttpGet("available-pallets")]
+        public async Task<IActionResult> GetAvailablePallets()
+        {
+            try
+            {
+                var movements = await _context.StoreMovements
+                    .Where(m => m.GrnPalletId != null)
+                    .Include(m => m.GrnPallet)
+                        .ThenInclude(p => p.GrnLine)
+                            .ThenInclude(l => l.Item)
+                    .Include(m => m.GrnPallet)
+                        .ThenInclude(p => p.GrnLine)
+                            .ThenInclude(l => l.Header)
+                    .Include(m => m.StorePosition)
+                        .ThenInclude(sp => sp.Store)
+                    .Include(m => m.RackRow)
+                        .ThenInclude(r => r.Column)
+                            .ThenInclude(c => c.Rack)
+                                .ThenInclude(rk => rk.Store)
+                                    .ThenInclude(lm => lm.StoreMaster)
+                    .ToListAsync();
+
+                var issuedPalletNos = await _context.MaterialIssues
+                    .Where(x => x.PalletNo != null)
+                    .Select(x => x.PalletNo)
+                    .ToListAsync();
+
+                var issuedSet = new HashSet<string>(issuedPalletNos, StringComparer.OrdinalIgnoreCase);
+
+                // Group by pallet so Front+Rear (or any multi-row stuffing)
+                // collapses into a single entry per pallet.
+                var grouped = movements
+                    .GroupBy(m => m.GrnPalletId)
+                    .Select(g =>
+                    {
+                        var first = g.OrderBy(m => m.MovementDate).First();
+                        var pallet = first.GrnPallet;
+                        var line = pallet.GrnLine;
+
+                        // Resolve location: StorePosition path OR RackRow path.
+                        string location = first.StorePosition?.Store?.StoreLocation;
+
+                        if (location == null && first.RackRow != null)
+                        {
+                            location = first.RackRow.Column?.Rack?.Store?.StoreMaster?.StoreLocation;
+                        }
+
+                        return new
+                        {
+                            itemId = line.ItemId,
+                            partLabel = $"{line.Item.ItemNumber} - {line.Item.ItemName}",
+                            storeLocation = location,
+                            palletNo = pallet.PalletNo,
+                            fifoPalletNo = line.FifoPalletNo,
+                            movementDate = g.Min(m => m.MovementDate),
+                            quantity = g.Sum(m => m.Quantity),
+                            type = string.Equals(line.Header.GrnType, "Regular", StringComparison.OrdinalIgnoreCase)
+                                ? "REGULAR"
+                                : "SAMPLE"
+                        };
+                    })
+                    // Exclude anything already issued — real, server-side
+                    // duplicate prevention.
+                    .Where(r => !issuedSet.Contains(r.palletNo))
+                    // TRUE FIFO: earliest movement first.
+                    .OrderBy(r => r.movementDate)
+                    .ToList();
+
+                return Ok(grouped);
+            }
+            catch (Exception ex)
+            {
+                var detail = ex.InnerException?.Message ?? ex.Message;
+                return StatusCode(500, new { message = $"Failed to load available pallets: {detail}" });
+            }
         }
 
         // GET: api/StoreMovement/grn/5/pallets
@@ -108,8 +197,6 @@ namespace DFN_BMS.Controllers
         }
 
         // GET: api/StoreMovement/positions
-        // Kept for backward compatibility with the old simplified P1/P2
-        // model — no longer used by the frontend's Select Pallet screen.
         [HttpGet("positions")]
         public async Task<IActionResult> GetPositions()
         {
@@ -159,11 +246,6 @@ namespace DFN_BMS.Controllers
         }
 
         // GET: api/StoreMovement/rack-slots
-        // Returns the REAL Location Master hierarchy — every Store, its
-        // actual Racks/Columns/Rows (whatever exists, nothing hardcoded),
-        // with each row's Front/Rear slots (derived from Fixture, same
-        // odd/even numbering as the Location Master preview) flagged as
-        // occupied or available based on real StoreMovement records.
         [HttpGet("rack-slots")]
         public async Task<IActionResult> GetRackSlots()
         {
@@ -214,9 +296,6 @@ namespace DFN_BMS.Controllers
         }
 
         // POST: api/StoreMovement/stuff-rack-slot
-        // Stuffs a specific GrnPallet into a specific real Rack Row +
-        // Slot Number + Side (the dynamic replacement for the old
-        // stuff-into-P1/P2 action).
         public class StuffRackSlotRequest
         {
             public int GrnPalletId { get; set; }
