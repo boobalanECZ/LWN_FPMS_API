@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,11 +14,42 @@ namespace DFN_BMS.Controllers
     {
         private readonly AppDbContext _context;
 
-        private static readonly Regex ColourRegex = new Regex(@"^#[0-9A-Fa-f]{6}$");
-
         public StoreMasterController(AppDbContext context)
         {
             _context = context;
+        }
+
+        // GET: api/StoreMaster/parts-list
+        // Feeds the new Part Number dropdown on the Store Master form.
+        [HttpGet("parts-list")]
+        public async Task<IActionResult> GetPartsList()
+        {
+            var data = await _context.ItemMasters
+                .Select(x => new
+                {
+                    value = x.Id,
+                    label = $"{x.ItemNumber} - {x.ItemName}"
+                })
+                .OrderBy(x => x.label)
+                .ToListAsync();
+
+            return Ok(data);
+        }
+
+        // GET: api/StoreMaster/pallet-types
+        [HttpGet("pallet-types")]
+        public async Task<IActionResult> GetPalletTypes()
+        {
+            var data = await _context.PalletTypeMasters
+                .Select(x => new
+                {
+                    value = x.Id,
+                    label = x.PalletName
+                })
+                .OrderBy(x => x.label)
+                .ToListAsync();
+
+            return Ok(data);
         }
 
         // GET: api/StoreMaster
@@ -28,6 +58,7 @@ namespace DFN_BMS.Controllers
         {
             var list = await _context.StoreMasters
                 .Include(x => x.PalletType)
+                .Include(x => x.PartNumber)
                 .OrderByDescending(x => x.Id)
                 .Select(x => new
                 {
@@ -36,7 +67,10 @@ namespace DFN_BMS.Controllers
                     x.PalletTypeId,
                     PalletTypeName = x.PalletType.PalletName,
                     x.PalletNumber,
-                    x.ColourCode
+                    x.ColourCode,
+                    x.PartNumberId,
+                    PartNumberCode = x.PartNumber != null ? x.PartNumber.ItemNumber : null,
+                    PartName = x.PartNumber != null ? x.PartNumber.ItemName : null
                 })
                 .ToListAsync();
 
@@ -47,7 +81,23 @@ namespace DFN_BMS.Controllers
         [HttpGet("{id}")]
         public async Task<IActionResult> GetById(int id)
         {
-            var item = await _context.StoreMasters.FindAsync(id);
+            var item = await _context.StoreMasters
+                .Include(x => x.PalletType)
+                .Include(x => x.PartNumber)
+                .Where(x => x.Id == id)
+                .Select(x => new
+                {
+                    x.Id,
+                    x.StoreLocation,
+                    x.PalletTypeId,
+                    PalletTypeName = x.PalletType.PalletName,
+                    x.PalletNumber,
+                    x.ColourCode,
+                    x.PartNumberId,
+                    PartNumberCode = x.PartNumber != null ? x.PartNumber.ItemNumber : null,
+                    PartName = x.PartNumber != null ? x.PartNumber.ItemName : null
+                })
+                .FirstOrDefaultAsync();
 
             if (item == null)
                 return NotFound(new { message = "Store record not found" });
@@ -55,20 +105,22 @@ namespace DFN_BMS.Controllers
             return Ok(item);
         }
 
-        // Generates the next pallet number for a series, wrapping back to
-        // RangeFrom once RangeTo is passed — e.g. IN-01 .. IN-30, then
-        // IN-01 again. Updates CurrentSequence on the type so the next
-        // call continues from here.
-        private async Task<string> GenerateNextPalletNumberAsync(PalletTypeMaster type)
+        private async Task<string> GeneratePalletNumberAsync(int palletTypeId)
         {
-            int next = type.CurrentSequence + 1;
-            if (next > type.RangeTo)
-                next = type.RangeFrom;
+            var palletType = await _context.PalletTypeMasters.FindAsync(palletTypeId);
+            if (palletType == null)
+                return null;
 
-            type.CurrentSequence = next;
+            var nextSeq = palletType.CurrentSequence + 1;
+
+            palletType.CurrentSequence = nextSeq;
             await _context.SaveChangesAsync();
 
-            return $"{type.PalletName}-{next:D2}";
+            var prefix = palletType.PalletName.Length >= 2
+                ? palletType.PalletName.Substring(0, 2).ToUpper()
+                : palletType.PalletName.ToUpper();
+
+            return $"{prefix}-{nextSeq:D2}";
         }
 
         // POST: api/StoreMaster
@@ -79,24 +131,31 @@ namespace DFN_BMS.Controllers
                 model.PalletTypeId <= 0 ||
                 string.IsNullOrWhiteSpace(model.ColourCode))
             {
-                return BadRequest(new { message = "Please fill all required fields" });
+                return BadRequest(new { message = "Store Location, Pallet Type and Colour are required" });
             }
 
-            var colourCode = model.ColourCode.Trim();
-
-            if (!ColourRegex.IsMatch(colourCode))
-                return BadRequest(new { message = "Colour must be a valid hex code (e.g. #1E88E5)" });
-
-            var palletType = await _context.PalletTypeMasters.FindAsync(model.PalletTypeId);
-            if (palletType == null)
+            var typeExists = await _context.PalletTypeMasters.AnyAsync(x => x.Id == model.PalletTypeId);
+            if (!typeExists)
                 return BadRequest(new { message = "Selected Pallet Type does not exist" });
+
+            if (model.PartNumberId.HasValue)
+            {
+                var partExists = await _context.ItemMasters.AnyAsync(x => x.Id == model.PartNumberId.Value);
+                if (!partExists)
+                    return BadRequest(new { message = "Selected Part Number does not exist" });
+            }
+
+            var palletNumber = await GeneratePalletNumberAsync(model.PalletTypeId);
+            if (palletNumber == null)
+                return BadRequest(new { message = "Failed to generate Pallet Number for the selected Pallet Type" });
 
             var entity = new StoreMaster
             {
                 StoreLocation = model.StoreLocation.Trim(),
                 PalletTypeId = model.PalletTypeId,
-                PalletNumber = await GenerateNextPalletNumberAsync(palletType),
-                ColourCode = colourCode.ToUpper(),
+                PalletNumber = palletNumber,
+                ColourCode = model.ColourCode.Trim(),
+                PartNumberId = model.PartNumberId,
                 CreatedDate = DateTime.Now
             };
 
@@ -107,9 +166,6 @@ namespace DFN_BMS.Controllers
         }
 
         // PUT: api/StoreMaster/5
-        // Note: changing the Pallet Type on an existing row does NOT
-        // regenerate PalletNumber — that's assigned once, at creation.
-        // Editing here only updates Store Location and Colour.
         [HttpPut("{id}")]
         public async Task<IActionResult> Update(int id, [FromBody] StoreMaster model)
         {
@@ -119,18 +175,23 @@ namespace DFN_BMS.Controllers
                 return NotFound(new { message = "Store record not found" });
 
             if (string.IsNullOrWhiteSpace(model.StoreLocation) ||
+                model.PalletTypeId <= 0 ||
                 string.IsNullOrWhiteSpace(model.ColourCode))
             {
-                return BadRequest(new { message = "Please fill all required fields" });
+                return BadRequest(new { message = "Store Location, Pallet Type and Colour are required" });
             }
 
-            var colourCode = model.ColourCode.Trim();
-
-            if (!ColourRegex.IsMatch(colourCode))
-                return BadRequest(new { message = "Colour must be a valid hex code (e.g. #1E88E5)" });
+            if (model.PartNumberId.HasValue)
+            {
+                var partExists = await _context.ItemMasters.AnyAsync(x => x.Id == model.PartNumberId.Value);
+                if (!partExists)
+                    return BadRequest(new { message = "Selected Part Number does not exist" });
+            }
 
             entity.StoreLocation = model.StoreLocation.Trim();
-            entity.ColourCode = colourCode.ToUpper();
+            entity.PalletTypeId = model.PalletTypeId;
+            entity.ColourCode = model.ColourCode.Trim();
+            entity.PartNumberId = model.PartNumberId;
             entity.ModifiedDate = DateTime.Now;
 
             await _context.SaveChangesAsync();

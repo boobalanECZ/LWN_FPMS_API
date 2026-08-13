@@ -37,6 +37,8 @@ namespace DFN_BMS.Controllers
                     x.IssuedTo,
                     x.IssuedBy,
                     x.StoreLocation,
+                    x.PalletNo,
+                    x.GrnNumber,
                     x.Remarks,
                     x.IssueDate
                 })
@@ -85,6 +87,20 @@ namespace DFN_BMS.Controllers
                 if (!itemExists)
                     return BadRequest(new { message = "Selected Part Number does not exist" });
 
+                // SERVER-SIDE DUPLICATE GUARD: if this exact pallet has
+                // already been issued, reject it — this is the real,
+                // authoritative check (client-side checks can be bypassed
+                // by a stale cache, another device, a page refresh before
+                // sync, etc).
+                if (!string.IsNullOrWhiteSpace(model.PalletNo))
+                {
+                    var alreadyIssued = await _context.MaterialIssues
+                        .AnyAsync(x => x.PalletNo == model.PalletNo);
+
+                    if (alreadyIssued)
+                        return BadRequest(new { message = $"Pallet {model.PalletNo} has already been issued." });
+                }
+
                 var entity = new MaterialIssue
                 {
                     IssueNumber = await GenerateIssueNumberAsync(),
@@ -93,6 +109,13 @@ namespace DFN_BMS.Controllers
                     IssuedTo = model.IssuedTo.Trim(),
                     IssuedBy = model.IssuedBy.Trim(),
                     StoreLocation = model.StoreLocation?.Trim(),
+                    // FIX: these two were being silently dropped before —
+                    // the entity never picked up the pallet/GRN the
+                    // frontend actually sent, so every saved row ended up
+                    // with PalletNo = NULL, GrnNumber = NULL regardless of
+                    // what was scanned.
+                    PalletNo = model.PalletNo?.Trim(),
+                    GrnNumber = model.GrnNumber?.Trim(),
                     Remarks = model.Remarks?.Trim(),
                     IssueDate = DateTime.Now,
                     CreatedDate = DateTime.Now

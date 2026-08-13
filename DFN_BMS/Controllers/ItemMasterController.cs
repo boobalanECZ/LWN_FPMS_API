@@ -38,6 +38,27 @@ namespace DFN_BMS.Controllers
             return Ok(data);
         }
 
+        // GET: api/ItemMaster/uom-list
+        // Feeds the frontend's UOM CreatableSelect — same shape/pattern as
+        // item-types above. Note ItemMaster.Uom itself stays a plain
+        // string column (no FK), this table just powers the dropdown and
+        // keeps values consistent.
+        [HttpGet("uom-list")]
+        public async Task<IActionResult> GetUomList()
+        {
+            var data = await _context.UomMasters
+                .Where(x => x.IsActive)
+                .Select(x => new
+                {
+                    value = x.UomName,
+                    label = x.UomName
+                })
+                .OrderBy(x => x.label)
+                .ToListAsync();
+
+            return Ok(data);
+        }
+
         // GET: api/ItemMaster
         [HttpGet]
         public async Task<IActionResult> GetAll()
@@ -153,6 +174,35 @@ namespace DFN_BMS.Controllers
             return null;
         }
 
+        // Companion helper for Uom — since ItemMaster.Uom is a plain
+        // string column (not a FK), this just makes sure whatever the
+        // person picked/typed in the CreatableSelect exists in
+        // UOM_MASTER for future dropdowns, then normalizes the value
+        // that actually gets saved on the item (uppercased, trimmed).
+        private async Task RegisterUomIfNewAsync(ItemMaster item)
+        {
+            if (string.IsNullOrWhiteSpace(item.Uom))
+                return;
+
+            var uomName = item.Uom.Trim().ToUpper();
+
+            var exists = await _context.UomMasters
+                .AnyAsync(x => x.UomName.ToUpper() == uomName);
+
+            if (!exists)
+            {
+                _context.UomMasters.Add(new UomMaster
+                {
+                    UomName = uomName,
+                    IsActive = true
+                });
+
+                await _context.SaveChangesAsync();
+            }
+
+            item.Uom = uomName;
+        }
+
         // POST: api/ItemMaster
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] ItemMaster model)
@@ -184,6 +234,8 @@ namespace DFN_BMS.Controllers
             var typeResult = await ResolveItemTypeAsync(model);
             if (typeResult != null)
                 return typeResult;
+
+            await RegisterUomIfNewAsync(model);
 
             var entity = new ItemMaster
             {
@@ -243,6 +295,8 @@ namespace DFN_BMS.Controllers
             var typeResult = await ResolveItemTypeAsync(model);
             if (typeResult != null)
                 return typeResult;
+
+            await RegisterUomIfNewAsync(model);
 
             entity.ItemName = model.ItemName.Trim();
             entity.ItemTypeId = model.ItemTypeId;
