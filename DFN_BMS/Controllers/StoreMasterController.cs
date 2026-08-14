@@ -24,14 +24,18 @@ namespace DFN_BMS.Controllers
         [HttpGet("parts-list")]
         public async Task<IActionResult> GetPartsList()
         {
-            var data = await _context.ItemMasters
+            var raw = await _context.ItemMasters
+                .Select(x => new { x.Id, x.ItemNumber, x.ItemName })
+                .ToListAsync();
+
+            var data = raw
                 .Select(x => new
                 {
                     value = x.Id,
                     label = $"{x.ItemNumber} - {x.ItemName}"
                 })
                 .OrderBy(x => x.label)
-                .ToListAsync();
+                .ToList();
 
             return Ok(data);
         }
