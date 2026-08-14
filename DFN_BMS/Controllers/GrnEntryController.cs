@@ -42,7 +42,13 @@ namespace DFN_BMS.Controllers
             public string GrnType { get; set; }
             public string SupplierInvoiceNumber { get; set; }
             public DateTime SupplierInvoiceDate { get; set; }
-            public string? GrnNo { get; set; }   // only used the first time a FY's counter is seeded
+            public string? GrnNo { get; set; }   // manually-typed GRN No (seed OR override)
+
+            // ★ NEW: true when the user explicitly ticked "Edit GRN No" in
+            // the UI to override an already-running auto-sequence mid-way.
+            // false/omitted means normal auto-generation (or first-ever seed).
+            public bool OverrideGrnNo { get; set; } = false;
+
             public List<GrnLineRequest> Lines { get; set; } = new List<GrnLineRequest>();
         }
 
@@ -169,17 +175,23 @@ namespace DFN_BMS.Controllers
         }
 
         // Resolves the GRN number to actually use for this Create() call:
-        //  - If a counter already exists, ignore whatever the client sent
-        //    and auto-increment server-side (avoids races / accidental
-        //    overrides once the sequence is live).
+        //  - If a counter already exists AND the client is NOT overriding
+        //    it, ignore whatever the client sent and auto-increment
+        //    server-side (avoids races / accidental overrides once the
+        //    sequence is live).
+        //  - If a counter already exists AND the client IS overriding it
+        //    (overrideGrnNo = true, from the "Edit GRN No" checkbox), take
+        //    the client's typed value as-is, and reseed the counter's
+        //    Prefix/PadWidth/LastSequence from it so every subsequent GRN
+        //    auto-continues from this new value.
         //  - If no counter exists yet, this is the very first GRN ever —
         //    require the client's manually-typed GrnNo (any format, as
         //    long as it ends in digits) and seed the counter from it.
-        private async Task<(string grnNumber, string error)> ResolveGrnNumberAsync(string clientGrnNo)
+        private async Task<(string grnNumber, string error)> ResolveGrnNumberAsync(string clientGrnNo, bool overrideGrnNo)
         {
             var counter = await _context.GrnCounters.OrderByDescending(x => x.Id).FirstOrDefaultAsync();
 
-            if (counter != null)
+            if (counter != null && !overrideGrnNo)
             {
                 var nextSeq = counter.LastSequence + 1;
                 counter.LastSequence = nextSeq;
@@ -187,9 +199,14 @@ namespace DFN_BMS.Controllers
                 return ($"{counter.Prefix}{nextSeq.ToString().PadLeft(counter.PadWidth, '0')}", null);
             }
 
-            // First-ever GRN — must be typed manually.
+            // Either the very first GRN ever, or a mid-sequence override —
+            // both paths require a manually-typed value.
             if (string.IsNullOrWhiteSpace(clientGrnNo))
-                return (null, "Enter a starting GRN No (e.g. 260001) — this is the first GRN ever entered");
+            {
+                return (null, counter == null
+                    ? "Enter a starting GRN No (e.g. 260001) — this is the first GRN ever entered"
+                    : "Enter a GRN No to override the auto-generated value");
+            }
 
             var grnNo = clientGrnNo.Trim();
             var (prefix, number, padWidth) = SplitPrefixAndNumber(grnNo);
@@ -197,8 +214,21 @@ namespace DFN_BMS.Controllers
             if (padWidth == 0)
                 return (null, "GRN No must end with at least one digit (e.g. 260001)");
 
-            var newCounter = new GrnCounter { Prefix = prefix, PadWidth = padWidth, LastSequence = number };
-            _context.GrnCounters.Add(newCounter);
+            if (counter == null)
+            {
+                // First-ever GRN: create the counter.
+                var newCounter = new GrnCounter { Prefix = prefix, PadWidth = padWidth, LastSequence = number };
+                _context.GrnCounters.Add(newCounter);
+            }
+            else
+            {
+                // Mid-sequence override: reseed the existing counter so
+                // future auto-generated numbers continue from this value.
+                counter.Prefix = prefix;
+                counter.PadWidth = padWidth;
+                counter.LastSequence = number;
+            }
+
             await _context.SaveChangesAsync();
 
             return (grnNo, null);
@@ -249,7 +279,7 @@ namespace DFN_BMS.Controllers
                         return BadRequest(new { message = $"Part Number (Item Id {line.ItemId}) does not exist" });
                 }
 
-                var (grnNumber, grnNoError) = await ResolveGrnNumberAsync(req.GrnNo);
+                var (grnNumber, grnNoError) = await ResolveGrnNumberAsync(req.GrnNo, req.OverrideGrnNo);
                 if (grnNoError != null)
                     return BadRequest(new { message = grnNoError });
 

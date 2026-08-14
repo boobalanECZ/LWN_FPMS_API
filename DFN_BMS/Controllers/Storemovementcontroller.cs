@@ -109,25 +109,38 @@ namespace DFN_BMS.Controllers
         }
 
         // GET: api/StoreMovement/grn/5/pallets
+        // GET: api/StoreMovement/grn/5/pallets
         [HttpGet("grn/{grnId}/pallets")]
         public async Task<IActionResult> GetPalletsForGrn(int grnId)
         {
             try
             {
+                // IMPORTANT:
+                // Only POSTED GRN lines are allowed to appear as pallets
+                // in Store Movement.
                 var lines = await _context.GrnLines
                     .Include(x => x.Item)
-                    .Where(x => x.GrnHeaderId == grnId)
+                    .Where(x => x.GrnHeaderId == grnId && x.IsPosted)
                     .ToListAsync();
 
                 if (lines.Count == 0)
-                    return NotFound(new { message = "GRN not found or has no lines" });
+                {
+                    return NotFound(new
+                    {
+                        message = "No posted pallets found for this GRN"
+                    });
+                }
 
+                // Create GrnPallet only for POSTED lines
                 foreach (var line in lines)
                 {
-                    var exists = await _context.GrnPallets.AnyAsync(p => p.GrnLineId == line.Id);
+                    var exists = await _context.GrnPallets
+                        .AnyAsync(p => p.GrnLineId == line.Id);
+
                     if (!exists)
                     {
                         var palletNo = await GenerateNextPalletNoAsync();
+
                         _context.GrnPallets.Add(new GrnPallet
                         {
                             GrnLineId = line.Id,
@@ -136,14 +149,18 @@ namespace DFN_BMS.Controllers
                             Rate = line.Rate,
                             CreatedDate = DateTime.Now
                         });
+
                         await _context.SaveChangesAsync();
                     }
                 }
 
+                // Return ONLY pallets belonging to POSTED GRN lines
                 var pallets = await _context.GrnPallets
                     .Include(x => x.GrnLine)
                         .ThenInclude(l => l.Item)
-                    .Where(x => x.GrnLine.GrnHeaderId == grnId)
+                    .Where(x =>
+                        x.GrnLine.GrnHeaderId == grnId &&
+                        x.GrnLine.IsPosted)
                     .OrderBy(x => x.PalletNo)
                     .Select(x => new
                     {
@@ -151,13 +168,18 @@ namespace DFN_BMS.Controllers
                         x.PalletNo,
                         x.Quantity,
                         x.Rate,
+
                         PartNumber = x.GrnLine.Item.ItemNumber,
                         PartName = x.GrnLine.Item.ItemName,
+
                         StuffedQty = _context.StoreMovements
                             .Where(m => m.GrnPalletId == x.Id)
                             .Sum(m => (decimal?)m.Quantity) ?? 0,
+
                         Assignments = _context.StoreMovements
-                            .Where(m => m.GrnPalletId == x.Id && m.StorePositionId != null)
+                            .Where(m =>
+                                m.GrnPalletId == x.Id &&
+                                m.StorePositionId != null)
                             .Select(m => new
                             {
                                 m.Id,
@@ -175,7 +197,11 @@ namespace DFN_BMS.Controllers
             catch (Exception ex)
             {
                 var detail = ex.InnerException?.Message ?? ex.Message;
-                return StatusCode(500, new { message = $"Failed to load pallets: {detail}" });
+
+                return StatusCode(500, new
+                {
+                    message = $"Failed to load pallets: {detail}"
+                });
             }
         }
 
