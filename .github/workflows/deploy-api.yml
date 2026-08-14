@@ -1,0 +1,175 @@
+name: Deploy FPMS API
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+
+      # 1. Get source code
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # 2. Show server information
+      - name: Show runner information
+        shell: powershell
+        run: |
+          Write-Host "======================================"
+          Write-Host "FPMS API Deployment Started"
+          Write-Host "======================================"
+          Write-Host "Computer: $env:COMPUTERNAME"
+
+      # 3. Check .NET
+      - name: Check .NET
+        shell: powershell
+        run: |
+          dotnet --version
+
+      # 4. Restore
+      - name: Restore API
+        shell: powershell
+        working-directory: DFN_BMS
+        run: |
+          dotnet restore
+
+      # 5. Build
+      - name: Build API
+        shell: powershell
+        working-directory: DFN_BMS
+        run: |
+          dotnet build --configuration Release --no-restore
+
+      # 6. Publish
+      - name: Publish API
+        shell: powershell
+        working-directory: DFN_BMS
+        run: |
+
+          $publishPath = "$env:RUNNER_TEMP\FPMS_API"
+
+          Write-Host "Publish path:"
+          Write-Host $publishPath
+
+          if (Test-Path $publishPath) {
+              Remove-Item $publishPath -Recurse -Force
+          }
+
+          dotnet publish `
+            --configuration Release `
+            --no-build `
+            --output $publishPath
+
+          if (!(Test-Path $publishPath)) {
+              throw "Publish failed. Folder was not created."
+          }
+
+          Write-Host "API published successfully."
+
+      # 7. Backup existing API
+      - name: Backup Existing API
+        shell: powershell
+        run: |
+
+          $livePath = "D:\EZ Hosting\FPMS_LWN\912_LWN_FPMS-12-08-2026 V1\API"
+
+          $backupRoot = "D:\EZ Hosting\FPMS_LWN\Backups\API"
+
+          $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+
+          $backupPath = Join-Path $backupRoot $timestamp
+
+          Write-Host "======================================"
+          Write-Host "Creating API Backup"
+          Write-Host "======================================"
+
+          Write-Host "Live API:"
+          Write-Host $livePath
+
+          Write-Host "Backup:"
+          Write-Host $backupPath
+
+          if (!(Test-Path $livePath)) {
+              throw "Live API folder does not exist: $livePath"
+          }
+
+          if (!(Test-Path $backupRoot)) {
+              New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+          }
+
+          New-Item -ItemType Directory -Force -Path $backupPath | Out-Null
+
+          robocopy $livePath $backupPath /E /R:2 /W:2
+
+          if ($LASTEXITCODE -ge 8) {
+              throw "API backup failed. Robocopy exit code: $LASTEXITCODE"
+          }
+
+          Write-Host "Backup completed successfully."
+          Write-Host "Backup location: $backupPath"
+
+      # 8. Replace live API
+      - name: Replace Live API
+        shell: powershell
+        run: |
+
+          $sourcePath = "$env:RUNNER_TEMP\FPMS_API"
+
+          $livePath = "D:\EZ Hosting\FPMS_LWN\912_LWN_FPMS-12-08-2026 V1\API"
+
+          Write-Host "======================================"
+          Write-Host "Replacing Live API"
+          Write-Host "======================================"
+
+          Write-Host "Published API:"
+          Write-Host $sourcePath
+
+          Write-Host "Live API:"
+          Write-Host $livePath
+
+          if (!(Test-Path $sourcePath)) {
+              throw "Published API folder does not exist."
+          }
+
+          if (!(Test-Path $livePath)) {
+              New-Item -ItemType Directory -Force -Path $livePath | Out-Null
+          }
+
+          robocopy $sourcePath $livePath /MIR /R:2 /W:2
+
+          if ($LASTEXITCODE -ge 8) {
+              throw "API deployment failed. Robocopy exit code: $LASTEXITCODE"
+          }
+
+          Write-Host "Live API replaced successfully."
+
+      # 9. Verify deployment
+      - name: Verify API Deployment
+        shell: powershell
+        run: |
+
+          $livePath = "D:\EZ Hosting\FPMS_LWN\912_LWN_FPMS-12-08-2026 V1\API"
+
+          Write-Host "======================================"
+          Write-Host "Verifying Deployment"
+          Write-Host "======================================"
+
+          if (!(Test-Path "$livePath\DFN_BMS.dll")) {
+              throw "DFN_BMS.dll was not found after deployment."
+          }
+
+          Write-Host "DFN_BMS.dll found."
+          Write-Host "Deployment verified successfully."
+
+      # 10. Completed
+      - name: Deployment completed
+        shell: powershell
+        run: |
+
+          Write-Host "======================================"
+          Write-Host "FPMS API DEPLOYMENT SUCCESSFUL"
+          Write-Host "======================================"
