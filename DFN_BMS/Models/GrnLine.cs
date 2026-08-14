@@ -43,6 +43,8 @@ namespace DFN_BMS.Models
         [Column(TypeName = "decimal(18,2)")]
         public decimal TotalValue { get; set; }
 
+        //test
+
         // ---------- Per-line posting / FIFO label fields ----------
         public bool IsPosted { get; set; } = false;
 
