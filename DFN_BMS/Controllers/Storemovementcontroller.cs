@@ -132,6 +132,7 @@ namespace DFN_BMS.Controllers
                 }
 
                 // Create GrnPallet only for POSTED lines
+                // Create GrnPallet only for POSTED lines
                 foreach (var line in lines)
                 {
                     var exists = await _context.GrnPallets
@@ -139,7 +140,18 @@ namespace DFN_BMS.Controllers
 
                     if (!exists)
                     {
-                        var palletNo = await GenerateNextPalletNoAsync();
+                        // IMPORTANT:
+                        // Do NOT generate P001/P002/P003 here.
+                        // GRN POST has already generated the real pallet number.
+                        var palletNo = line.PalletNo;
+
+                        if (string.IsNullOrWhiteSpace(palletNo))
+                        {
+                            return BadRequest(new
+                            {
+                                message = $"Pallet number is not available for GRN Line {line.Id}"
+                            });
+                        }
 
                         _context.GrnPallets.Add(new GrnPallet
                         {
@@ -205,22 +217,7 @@ namespace DFN_BMS.Controllers
             }
         }
 
-        private async Task<string> GenerateNextPalletNoAsync()
-        {
-            var last = await _context.GrnPallets
-                .OrderByDescending(x => x.Id)
-                .FirstOrDefaultAsync();
-
-            int nextSeq = 1;
-
-            if (last != null && last.PalletNo.StartsWith("P"))
-            {
-                if (int.TryParse(last.PalletNo.Substring(1), out int lastSeq))
-                    nextSeq = lastSeq + 1;
-            }
-
-            return $"P{nextSeq:D3}";
-        }
+   
 
         // GET: api/StoreMovement/positions
         [HttpGet("positions")]
