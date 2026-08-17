@@ -24,7 +24,7 @@ namespace DFN_BMS.Controllers
         {
             _context = context;
         }
-
+        // the UI to override an already-running auto-sequence mid-way.
         public class GrnLineRequest
         {
             public int ItemId { get; set; }
