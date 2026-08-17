@@ -11,69 +11,253 @@ jobs:
 
     steps:
 
-      # 1. Get source code
+      # ============================================================
+      # 1. CHECKOUT SOURCE CODE
+      # ============================================================
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 2. Show server information
+      # ============================================================
+      # 2. SHOW RUNNER INFORMATION
+      # ============================================================
       - name: Show runner information
         shell: powershell
         run: |
-          Write-Host "======================================"
-          Write-Host "FPMS API Deployment Started"
-          Write-Host "======================================"
-          Write-Host "Computer: $env:COMPUTERNAME"
+          $ErrorActionPreference = "Stop"
 
-      # 3. Check .NET
+          Write-Host "=============================================="
+          Write-Host "       FPMS API DEPLOYMENT STARTED"
+          Write-Host "=============================================="
+
+          Write-Host "Computer Name : $env:COMPUTERNAME"
+          Write-Host "User          : $env:USERNAME"
+          Write-Host "Runner Temp   : $env:RUNNER_TEMP"
+          Write-Host "Workspace     : $env:GITHUB_WORKSPACE"
+
+      # ============================================================
+      # 3. CHECK .NET
+      # ============================================================
       - name: Check .NET
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=============================================="
+          Write-Host "Checking .NET"
+          Write-Host "=============================================="
+
           dotnet --version
 
-      # 4. Restore
+          if ($LASTEXITCODE -ne 0) {
+              throw ".NET SDK is not available."
+          }
+
+      # ============================================================
+      # 4. CHECK PROJECT
+      # ============================================================
+      - name: Check API project
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $projectPath = Join-Path $env:GITHUB_WORKSPACE "DFN_BMS\DFN_BMS.csproj"
+
+          Write-Host "=============================================="
+          Write-Host "Checking API Project"
+          Write-Host "=============================================="
+
+          Write-Host "Project:"
+          Write-Host $projectPath
+
+          if (!(Test-Path $projectPath)) {
+              throw "DFN_BMS.csproj was not found: $projectPath"
+          }
+
+          Write-Host "DFN_BMS.csproj found successfully."
+
+      # ============================================================
+      # 5. RESTORE
+      # ============================================================
       - name: Restore API
         shell: powershell
         working-directory: DFN_BMS
         run: |
-          dotnet restore
+          $ErrorActionPreference = "Stop"
 
-      # 5. Build
+          Write-Host "=============================================="
+          Write-Host "Restoring API"
+          Write-Host "=============================================="
+
+          dotnet restore .\DFN_BMS.csproj
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "dotnet restore failed."
+          }
+
+          Write-Host "Restore completed successfully."
+
+      # ============================================================
+      # 6. BUILD
+      # ============================================================
       - name: Build API
         shell: powershell
         working-directory: DFN_BMS
         run: |
-          dotnet build --configuration Release --no-restore
+          $ErrorActionPreference = "Stop"
 
-      # 6. Publish
+          Write-Host "=============================================="
+          Write-Host "Building API"
+          Write-Host "=============================================="
+
+          dotnet build .\DFN_BMS.csproj `
+            --configuration Release `
+            --no-restore
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "dotnet build failed."
+          }
+
+          Write-Host "Build completed successfully."
+
+      # ============================================================
+      # 7. PUBLISH
+      # ============================================================
       - name: Publish API
         shell: powershell
         working-directory: DFN_BMS
         run: |
+          $ErrorActionPreference = "Stop"
 
-          $publishPath = "$env:RUNNER_TEMP\FPMS_API"
+          $publishPath = Join-Path $env:RUNNER_TEMP "FPMS_API"
 
-          Write-Host "Publish path:"
+          Write-Host "=============================================="
+          Write-Host "Publishing API"
+          Write-Host "=============================================="
+
+          Write-Host "Publish Path:"
           Write-Host $publishPath
 
+          # Remove previous publish folder
           if (Test-Path $publishPath) {
-              Remove-Item $publishPath -Recurse -Force
+
+              Write-Host "Removing previous publish folder..."
+
+              Remove-Item `
+                -Path $publishPath `
+                -Recurse `
+                -Force `
+                -ErrorAction Stop
           }
 
-          dotnet publish `
+          # Create publish folder
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $publishPath | Out-Null
+
+          # Publish
+          dotnet publish .\DFN_BMS.csproj `
             --configuration Release `
             --no-build `
             --output $publishPath
 
-          if (!(Test-Path $publishPath)) {
-              throw "Publish failed. Folder was not created."
+          if ($LASTEXITCODE -ne 0) {
+              throw "dotnet publish failed."
           }
 
-          Write-Host "API published successfully."
+          # Verify publish folder
+          if (!(Test-Path $publishPath)) {
+              throw "Publish folder was not created: $publishPath"
+          }
 
-      # 7. Backup existing API
+          # Verify DLL
+          $publishedDll = Join-Path $publishPath "DFN_BMS.dll"
+
+          if (!(Test-Path $publishedDll)) {
+              throw "DFN_BMS.dll was not found in published output."
+          }
+
+          Write-Host ""
+          Write-Host "API published successfully."
+          Write-Host "Published DLL:"
+          Write-Host $publishedDll
+
+      # ============================================================
+      # 8. CHECK DEPLOYMENT PATHS AND PERMISSIONS
+      # ============================================================
+      - name: Check deployment paths
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $rootPath = "D:\EZ Hosting\FPMS_LWN"
+
+          $livePath = "D:\EZ Hosting\FPMS_LWN\912_LWN_FPMS-12-08-2026 V1\API"
+
+          $backupRoot = "D:\EZ Hosting\FPMS_LWN\Backups\API"
+
+          Write-Host "=============================================="
+          Write-Host "Checking Deployment Paths"
+          Write-Host "=============================================="
+
+          Write-Host "Root Path:"
+          Write-Host $rootPath
+
+          Write-Host "Live API Path:"
+          Write-Host $livePath
+
+          Write-Host "Backup Path:"
+          Write-Host $backupRoot
+
+          # Check D drive
+          if (!(Test-Path "D:\")) {
+              throw "D: drive is not accessible."
+          }
+
+          # Check root
+          if (!(Test-Path $rootPath)) {
+              throw "FPMS_LWN root folder does not exist: $rootPath"
+          }
+
+          # Check live API
+          if (!(Test-Path $livePath)) {
+              throw "Live API folder does not exist: $livePath"
+          }
+
+          Write-Host ""
+          Write-Host "All required paths exist."
+
+          # --------------------------------------------------------
+          # Test write permission
+          # --------------------------------------------------------
+
+          $testFile = Join-Path $rootPath "github_actions_test.txt"
+
+          Write-Host ""
+          Write-Host "Testing write permission..."
+
+          "GitHub Actions deployment test" |
+            Out-File `
+              -FilePath $testFile `
+              -Force
+
+          if (!(Test-Path $testFile)) {
+              throw "Runner cannot write to: $rootPath"
+          }
+
+          Remove-Item `
+            -Path $testFile `
+            -Force
+
+          Write-Host "Write permission confirmed."
+
+      # ============================================================
+      # 9. BACKUP EXISTING API
+      # ============================================================
       - name: Backup Existing API
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
 
           $livePath = "D:\EZ Hosting\FPMS_LWN\912_LWN_FPMS-12-08-2026 V1\API"
 
@@ -83,93 +267,244 @@ jobs:
 
           $backupPath = Join-Path $backupRoot $timestamp
 
-          Write-Host "======================================"
-          Write-Host "Creating API Backup"
-          Write-Host "======================================"
+          Write-Host "=============================================="
+          Write-Host "        BACKUP EXISTING API"
+          Write-Host "=============================================="
 
           Write-Host "Live API:"
           Write-Host $livePath
 
-          Write-Host "Backup:"
+          Write-Host ""
+          Write-Host "Backup Root:"
+          Write-Host $backupRoot
+
+          Write-Host ""
+          Write-Host "Backup Folder:"
           Write-Host $backupPath
+
+          # --------------------------------------------------------
+          # Verify live API
+          # --------------------------------------------------------
 
           if (!(Test-Path $livePath)) {
               throw "Live API folder does not exist: $livePath"
           }
 
+          # --------------------------------------------------------
+          # Automatically create Backup\API
+          # --------------------------------------------------------
+
           if (!(Test-Path $backupRoot)) {
-              New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+
+              Write-Host ""
+              Write-Host "Backup root does not exist."
+              Write-Host "Creating automatically..."
+
+              New-Item `
+                -ItemType Directory `
+                -Force `
+                -Path $backupRoot | Out-Null
+
+              Write-Host "Backup root created."
+          }
+          else {
+              Write-Host ""
+              Write-Host "Backup root already exists."
           }
 
-          New-Item -ItemType Directory -Force -Path $backupPath | Out-Null
+          # --------------------------------------------------------
+          # Create timestamp folder
+          # --------------------------------------------------------
 
-          robocopy $livePath $backupPath /E /R:2 /W:2
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $backupPath | Out-Null
 
-          if ($LASTEXITCODE -ge 8) {
-              throw "API backup failed. Robocopy exit code: $LASTEXITCODE"
+          Write-Host ""
+          Write-Host "Timestamp backup folder created."
+
+          # --------------------------------------------------------
+          # Copy existing API
+          # --------------------------------------------------------
+
+          Write-Host ""
+          Write-Host "Starting API backup..."
+
+          robocopy `
+            $livePath `
+            $backupPath `
+            /E `
+            /R:2 `
+            /W:2 `
+            /COPY:DAT `
+            /DCOPY:DAT
+
+          $robocopyExitCode = $LASTEXITCODE
+
+          Write-Host ""
+          Write-Host "Robocopy Exit Code: $robocopyExitCode"
+
+          # Robocopy 0-7 = success/non-fatal
+          # 8+ = failure
+          if ($robocopyExitCode -ge 8) {
+              throw "API backup failed. Robocopy exit code: $robocopyExitCode"
           }
 
-          Write-Host "Backup completed successfully."
-          Write-Host "Backup location: $backupPath"
+          # Verify backup contains DLL
+          $backupDll = Join-Path $backupPath "DFN_BMS.dll"
 
-      # 8. Replace live API
+          if (!(Test-Path $backupDll)) {
+              throw "Backup verification failed. DFN_BMS.dll not found."
+          }
+
+          Write-Host ""
+          Write-Host "=============================================="
+          Write-Host "       API BACKUP SUCCESSFUL"
+          Write-Host "=============================================="
+
+          Write-Host "Backup Location:"
+          Write-Host $backupPath
+
+      # ============================================================
+      # 10. REPLACE LIVE API
+      # ============================================================
       - name: Replace Live API
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
 
-          $sourcePath = "$env:RUNNER_TEMP\FPMS_API"
+          $sourcePath = Join-Path $env:RUNNER_TEMP "FPMS_API"
 
           $livePath = "D:\EZ Hosting\FPMS_LWN\912_LWN_FPMS-12-08-2026 V1\API"
 
-          Write-Host "======================================"
-          Write-Host "Replacing Live API"
-          Write-Host "======================================"
+          Write-Host "=============================================="
+          Write-Host "        REPLACING LIVE API"
+          Write-Host "=============================================="
 
           Write-Host "Published API:"
           Write-Host $sourcePath
 
+          Write-Host ""
           Write-Host "Live API:"
           Write-Host $livePath
 
+          # --------------------------------------------------------
+          # Verify published API
+          # --------------------------------------------------------
+
           if (!(Test-Path $sourcePath)) {
-              throw "Published API folder does not exist."
+              throw "Published API folder does not exist: $sourcePath"
           }
+
+          $sourceDll = Join-Path $sourcePath "DFN_BMS.dll"
+
+          if (!(Test-Path $sourceDll)) {
+              throw "Published DFN_BMS.dll does not exist."
+          }
+
+          # --------------------------------------------------------
+          # Verify live path
+          # --------------------------------------------------------
 
           if (!(Test-Path $livePath)) {
-              New-Item -ItemType Directory -Force -Path $livePath | Out-Null
+
+              Write-Host ""
+              Write-Host "Live API folder does not exist."
+              Write-Host "Creating it..."
+
+              New-Item `
+                -ItemType Directory `
+                -Force `
+                -Path $livePath | Out-Null
           }
 
-          robocopy $sourcePath $livePath /MIR /R:2 /W:2
+          # --------------------------------------------------------
+          # Copy published API
+          # --------------------------------------------------------
 
-          if ($LASTEXITCODE -ge 8) {
-              throw "API deployment failed. Robocopy exit code: $LASTEXITCODE"
+          Write-Host ""
+          Write-Host "Copying published API to live folder..."
+
+          robocopy `
+            $sourcePath `
+            $livePath `
+            /MIR `
+            /R:5 `
+            /W:3 `
+            /COPY:DAT `
+            /DCOPY:DAT
+
+          $robocopyExitCode = $LASTEXITCODE
+
+          Write-Host ""
+          Write-Host "Robocopy Exit Code: $robocopyExitCode"
+
+          # Robocopy 0-7 = success/non-fatal
+          # 8+ = failure
+          if ($robocopyExitCode -ge 8) {
+              throw "API deployment failed. Robocopy exit code: $robocopyExitCode"
           }
 
+          Write-Host ""
           Write-Host "Live API replaced successfully."
 
-      # 9. Verify deployment
+      # ============================================================
+      # 11. VERIFY DEPLOYMENT
+      # ============================================================
       - name: Verify API Deployment
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
 
           $livePath = "D:\EZ Hosting\FPMS_LWN\912_LWN_FPMS-12-08-2026 V1\API"
 
-          Write-Host "======================================"
-          Write-Host "Verifying Deployment"
-          Write-Host "======================================"
+          $liveDll = Join-Path $livePath "DFN_BMS.dll"
 
-          if (!(Test-Path "$livePath\DFN_BMS.dll")) {
-              throw "DFN_BMS.dll was not found after deployment."
+          Write-Host "=============================================="
+          Write-Host "        VERIFYING DEPLOYMENT"
+          Write-Host "=============================================="
+
+          Write-Host "Live API:"
+          Write-Host $livePath
+
+          Write-Host ""
+          Write-Host "Checking:"
+          Write-Host $liveDll
+
+          if (!(Test-Path $liveDll)) {
+              throw "Deployment verification failed. DFN_BMS.dll was not found."
           }
 
-          Write-Host "DFN_BMS.dll found."
-          Write-Host "Deployment verified successfully."
+          $fileInfo = Get-Item $liveDll
 
-      # 10. Completed
+          Write-Host ""
+          Write-Host "DFN_BMS.dll found."
+          Write-Host "File Size: $($fileInfo.Length) bytes"
+          Write-Host "Modified : $($fileInfo.LastWriteTime)"
+
+          Write-Host ""
+          Write-Host "Deployment verification successful."
+
+      # ============================================================
+      # 12. DEPLOYMENT COMPLETED
+      # ============================================================
       - name: Deployment completed
         shell: powershell
         run: |
 
-          Write-Host "======================================"
-          Write-Host "FPMS API DEPLOYMENT SUCCESSFUL"
-          Write-Host "======================================"
+          Write-Host ""
+          Write-Host "=============================================="
+          Write-Host "     FPMS API DEPLOYMENT SUCCESSFUL"
+          Write-Host "=============================================="
+
+          Write-Host "Deployment completed successfully."
+          Write-Host "API location:"
+          Write-Host "D:\EZ Hosting\FPMS_LWN\912_LWN_FPMS-12-08-2026 V1\API"
+
+          Write-Host ""
+          Write-Host "Backup location:"
+          Write-Host "D:\EZ Hosting\FPMS_LWN\Backups\API"
+
+          Write-Host ""
+          Write-Host "=============================================="
