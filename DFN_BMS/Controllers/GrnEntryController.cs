@@ -399,7 +399,6 @@ namespace DFN_BMS.Controllers
         // PUT: api/GrnEntry/line/5/post
         // Marks a single GRN line ("item-wise" posting) as posted and
         // assigns it its own Pallet No / FIFO Pallet No, independent of
-        // any other line on the same GRN.
         [HttpPut("line/{lineId}/post")]
         public async Task<IActionResult> PostLine(int lineId)
         {
@@ -417,22 +416,114 @@ namespace DFN_BMS.Controllers
                 if (line.IsPosted)
                     return BadRequest(new { message = "This item is already posted" });
 
+                // ==========================================
+                // GENERATE PALLET NUMBER
+                // FROM STORE MASTER -> PALLET TYPE
+                // ==========================================
+
+                var palletNumber = await GenerateGrnPalletNumberAsync(line.ItemId);
+
+                if (palletNumber == null)
+                {
+                    return BadRequest(new
+                    {
+                        message =
+                            $"No pallet configuration found in Store Master for Part Number " +
+                            $"{line.Item?.ItemNumber ?? line.ItemId.ToString()}."
+                    });
+                }
+
+                // ==========================================
+                // POST GRN LINE
+                // ==========================================
+
                 line.IsPosted = true;
                 line.PostedDate = DateTime.Now;
-                line.PalletNo = await GenerateNextLinePalletNoAsync();
+
+                // Example: GI-01, GI-02 ... GI-70
+                line.PalletNo = palletNumber;
+
+                // FIFO number
                 line.FifoPalletNo = await GenerateLineFifoPalletNoAsync();
 
                 await _context.SaveChangesAsync();
 
-                return Ok(new { line.Id, line.PalletNo, line.FifoPalletNo });
+                return Ok(new
+                {
+                    line.Id,
+                    line.PalletNo,
+                    line.FifoPalletNo
+                });
             }
             catch (Exception ex)
             {
                 var detail = ex.InnerException?.Message ?? ex.Message;
-                return StatusCode(500, new { message = $"Post failed: {detail}" });
+
+                return StatusCode(500, new
+                {
+                    message = $"Post failed: {detail}"
+                });
             }
         }
 
+        private async Task<string> GenerateGrnPalletNumberAsync(int itemId)
+        {
+            // Find Store Master configuration for this Part Number
+            var storeMaster = await _context.StoreMasters
+                .FirstOrDefaultAsync(x => x.PartNumberId == itemId);
+
+            if (storeMaster == null)
+                return null;
+
+            // Get pallet type
+            var palletType = await _context.PalletTypeMasters
+                .FirstOrDefaultAsync(x => x.Id == storeMaster.PalletTypeId);
+
+            if (palletType == null)
+                return null;
+
+            // ==========================================
+            // NEXT SEQUENCE
+            // ==========================================
+
+            int nextSequence = palletType.CurrentSequence + 1;
+
+            // ==========================================
+            // 70 -> 1
+            // ==========================================
+
+            if (nextSequence > palletType.RangeTo)
+            {
+                nextSequence = palletType.RangeFrom;
+            }
+
+            // ==========================================
+            // UPDATE CURRENT SEQUENCE
+            // ==========================================
+
+            palletType.CurrentSequence = nextSequence;
+
+            // ==========================================
+            // PALLET PREFIX
+            // ==========================================
+
+            var prefix = palletType.PalletName.Length >= 2
+                ? palletType.PalletName.Substring(0, 2).ToUpper()
+                : palletType.PalletName.ToUpper();
+
+            // ==========================================
+            // GENERATE PALLET NUMBER
+            // Example:
+            // GI-01
+            // GI-02
+            // ...
+            // GI-70
+            // ==========================================
+
+            var palletNumber = $"{prefix}-{nextSequence:D2}";
+
+            return palletNumber;
+        }
         // DELETE: api/GrnEntry/line/5
         // Deletes a single GRN line. Blocked once that line is posted —
         // same reasoning as blocking edits on posted data elsewhere.
@@ -461,25 +552,7 @@ namespace DFN_BMS.Controllers
             }
         }
 
-        private async Task<string> GenerateNextLinePalletNoAsync()
-        {
-            const string prefix = "EX-";
-
-            var last = await _context.GrnLines
-                .Where(l => l.PalletNo != null && l.PalletNo.StartsWith(prefix))
-                .OrderByDescending(l => l.Id)
-                .FirstOrDefaultAsync();
-
-            int nextSeq = 1;
-
-            if (last?.PalletNo != null)
-            {
-                if (int.TryParse(last.PalletNo.Substring(prefix.Length), out int lastSeq))
-                    nextSeq = lastSeq + 1;
-            }
-
-            return $"{prefix}{nextSeq:D2}";
-        }
+   
 
         private async Task<string> GenerateLineFifoPalletNoAsync()
         {
