@@ -36,6 +36,7 @@ namespace DFN_BMS.Controllers
                     x.StoreMasterId,
                     StoreLocation = x.StoreMaster.StoreLocation,
                     PalletNumber = x.StoreMaster.PalletNumber,
+                    PartNumber = x.StoreMaster.PartNumber,
                     ColourCode = x.StoreMaster.ColourCode,
                     RackCount = x.Racks.Count
                 })
@@ -58,6 +59,7 @@ namespace DFN_BMS.Controllers
                     x.StoreMasterId,
                     StoreLocation = x.StoreMaster.StoreLocation,
                     PalletNumber = x.StoreMaster.PalletNumber,
+                    PartNumber = x.StoreMaster.PartNumber,
                     ColourCode = x.StoreMaster.ColourCode
                 })
                 .FirstOrDefaultAsync();

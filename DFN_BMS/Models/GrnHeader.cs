@@ -49,6 +49,7 @@ namespace DFN_BMS.Models
 
         [MaxLength(30)]
         public string? PalletNo { get; set; }         // e.g. EX-09, assigned on Post
+        public string? CreatedBy { get; set; }
 
         [MaxLength(30)]
         public string? FifoPalletNo { get; set; }      // e.g. F25070001, assigned on Post

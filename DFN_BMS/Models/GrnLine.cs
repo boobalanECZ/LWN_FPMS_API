@@ -48,6 +48,8 @@ namespace DFN_BMS.Models
         // ---------- Per-line posting / FIFO label fields ----------
         public bool IsPosted { get; set; } = false;
 
+        public string? PostedBy { get; set; }
+
         public DateTime? PostedDate { get; set; }
 
         [MaxLength(30)]

@@ -48,11 +48,19 @@ namespace DFN_BMS.Controllers
             // ★ NEW: true when the user explicitly ticked "Edit GRN No" in
             // the UI to override an already-running auto-sequence mid-way.
             // false/omitted means normal auto-generation (or first-ever seed).
+            public string? CreatedBy { get; set; }
             public bool OverrideGrnNo { get; set; } = false;
 
             public List<GrnLineRequest> Lines { get; set; } = new List<GrnLineRequest>();
+
         }
 
+        // GET: api/StoreMaster/configured-parts
+        // Returns only Part Numbers that have a Store Master configuration
+        // (a StoreMaster row with PartNumberId set). GRN posting requires this
+        // configuration to generate a Pallet No, so GRN Entry's Part Number
+        // dropdown should only offer parts that are actually postable.
+      
         // GET: api/GrnEntry?posted=false
         // posted omitted -> everything. posted=false -> GRNs that still
         // have at least one un-posted line ("Show All GRN Post" tab).
@@ -293,7 +301,8 @@ namespace DFN_BMS.Controllers
                     GrnType = req.GrnType,
                     SupplierInvoiceNumber = req.SupplierInvoiceNumber.Trim(),
                     SupplierInvoiceDate = req.SupplierInvoiceDate,
-                    CreatedDate = DateTime.Now
+                    CreatedDate = DateTime.Now,
+                    CreatedBy = req.CreatedBy?.Trim()
                 };
 
                 foreach (var line in req.Lines)
@@ -305,7 +314,7 @@ namespace DFN_BMS.Controllers
                         PalletQuantity = line.PalletQuantity,
                         Rate = line.Rate,
                         Quantity = line.Quantity,
-                        TotalValue = Math.Round(line.Rate * (line.PalletQuantity ?? 0), 2),
+                        TotalValue = Math.Round(line.Rate * line.Quantity, 2),
                         CreatedDate = DateTime.Now
                     });
                 }
@@ -337,6 +346,14 @@ namespace DFN_BMS.Controllers
 
             if (header.IsPosted)
                 return BadRequest(new { message = "A posted GRN cannot be edited" });
+
+            if (header.Lines.Any(x => x.IsPosted))
+            {
+                return BadRequest(new
+                {
+                    message = "A GRN with posted items cannot be edited"
+                });
+            }
 
             if (req == null || req.SupplierId <= 0 ||
                 string.IsNullOrWhiteSpace(req.PoNumber) ||
@@ -387,7 +404,7 @@ namespace DFN_BMS.Controllers
                     PalletQuantity = line.PalletQuantity,
                     Rate = line.Rate,
                     Quantity = line.Quantity,
-                    TotalValue = Math.Round(line.Rate * (line.PalletQuantity ?? 0), 2),
+                    TotalValue = Math.Round(line.Rate * line.Quantity, 2),
                     CreatedDate = DateTime.Now
                 });
             }
@@ -396,12 +413,17 @@ namespace DFN_BMS.Controllers
 
             return Ok(new { header.Id, header.GrnNumber });
         }
-
+        public class PostGrnLineRequest
+        {
+            public string? PostedBy { get; set; }
+        }
         // PUT: api/GrnEntry/line/5/post
         // Marks a single GRN line ("item-wise" posting) as posted and
         // assigns it its own Pallet No / FIFO Pallet No, independent of
         [HttpPut("line/{lineId}/post")]
-        public async Task<IActionResult> PostLine(int lineId)
+        public async Task<IActionResult> PostLine(
+    int lineId,
+    [FromBody] PostGrnLineRequest req)
         {
             try
             {
@@ -440,6 +462,7 @@ namespace DFN_BMS.Controllers
 
                 line.IsPosted = true;
                 line.PostedDate = DateTime.Now;
+                line.PostedBy = req?.PostedBy?.Trim();
 
                 // Example: GI-01, GI-02 ... GI-70
                 line.PalletNo = palletNumber;

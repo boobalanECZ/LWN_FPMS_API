@@ -31,6 +31,14 @@ namespace DFN_BMS.Controllers
         // already-issued pallets, so P001 kept coming back as "available"
         // forever, even after being Issued and synced. The server is now
         // the source of truth for what's actually still in stock.
+        //
+        // FIX (this version, #2): now also returns each pallet's real
+        // GrnNumber (from GrnHeader). Without this, the mobile app had no
+        // way to verify a scanned label's GRN claim against real data, so
+        // a scanned QR encoding a GRN that was never created (or doesn't
+        // belong to that pallet) could still show up in the Material
+        // Issue grid with a fabricated GRN number. The client now prefers
+        // this server-verified grnNo over whatever the raw scan said.
         [HttpGet("available-pallets")]
         public async Task<IActionResult> GetAvailablePallets()
         {
@@ -80,11 +88,24 @@ namespace DFN_BMS.Controllers
 
                         return new
                         {
+                            // The pallet's real database primary key.
+                            // PalletNo and FifoPalletNo are just
+                            // human-readable labels generated from a
+                            // sequence that gets reset (see
+                            // PALLET_TYPE_MASTER.CurrentSequence) — they
+                            // are NOT globally unique and get recycled
+                            // across different GRNs. `id` is the only
+                            // safe identity to match/dedupe on.
+                            id = g.Key,
                             itemId = line.ItemId,
                             partLabel = $"{line.Item.ItemNumber} - {line.Item.ItemName}",
                             storeLocation = location,
                             palletNo = pallet.PalletNo,
                             fifoPalletNo = line.FifoPalletNo,
+                            // Real, verified GRN number this pallet belongs
+                            // to — used by the client to catch scanned
+                            // labels claiming a GRN that doesn't match.
+                            grnNo = line.Header.GrnNumber,
                             movementDate = g.Min(m => m.MovementDate),
                             quantity = g.Sum(m => m.Quantity),
                             type = string.Equals(line.Header.GrnType, "Regular", StringComparison.OrdinalIgnoreCase)
@@ -217,7 +238,7 @@ namespace DFN_BMS.Controllers
             }
         }
 
-   
+
 
         // GET: api/StoreMovement/positions
         [HttpGet("positions")]
@@ -268,17 +289,26 @@ namespace DFN_BMS.Controllers
             }
         }
 
-        // GET: api/StoreMovement/rack-slots
+        // GET: api/StoreMovement/rack-slots?itemId=5
+        // Only returns stores whose Store Master configuration is for this
+        // exact Part Number — a pallet can only be stuffed into the store it
+        // was configured for, not any store in the system.
         [HttpGet("rack-slots")]
-        public async Task<IActionResult> GetRackSlots()
+        public async Task<IActionResult> GetRackSlots([FromQuery] int? itemId)
         {
             try
             {
-                var stores = await _context.LocationMasters
+                var query = _context.LocationMasters
                     .Include(x => x.StoreMaster)
                     .Include(x => x.Racks)
                         .ThenInclude(r => r.Columns)
                             .ThenInclude(c => c.Rows)
+                    .AsQueryable();
+
+                if (itemId.HasValue)
+                    query = query.Where(x => x.StoreMaster.PartNumberId == itemId.Value);
+
+                var stores = await query
                     .Select(store => new
                     {
                         store.Id,
@@ -326,6 +356,7 @@ namespace DFN_BMS.Controllers
             public int SlotNumber { get; set; }
             public string Side { get; set; } = "Front";
             public decimal Quantity { get; set; }
+            public string? CreatedBy { get; set; }
         }
 
         [HttpPost("stuff-rack-slot")]
@@ -342,13 +373,31 @@ namespace DFN_BMS.Controllers
                 if (req.Quantity <= 0)
                     return BadRequest(new { message = "Quantity must be greater than 0" });
 
-                var pallet = await _context.GrnPallets.FindAsync(req.GrnPalletId);
+                var pallet = await _context.GrnPallets
+                    .Include(p => p.GrnLine)
+                    .FirstOrDefaultAsync(p => p.Id == req.GrnPalletId);
                 if (pallet == null)
                     return BadRequest(new { message = "Pallet not found" });
 
-                var row = await _context.RackRows.FindAsync(req.RackRowId);
+                var row = await _context.RackRows
+                    .Include(r => r.Column)
+                        .ThenInclude(c => c.Rack)
+                            .ThenInclude(rk => rk.Store)
+                                .ThenInclude(lm => lm.StoreMaster)
+                    .FirstOrDefaultAsync(r => r.Id == req.RackRowId);
                 if (row == null)
                     return BadRequest(new { message = "Rack Row not found" });
+
+                // NEW: block stuffing a pallet into a store configured for a
+                // different Part Number.
+                var storeConfiguredPartId = row.Column?.Rack?.Store?.StoreMaster?.PartNumberId;
+                if (storeConfiguredPartId.HasValue && storeConfiguredPartId.Value != pallet.GrnLine.ItemId)
+                {
+                    return BadRequest(new
+                    {
+                        message = "This store location is configured for a different Part Number. Choose a slot in the correct store."
+                    });
+                }
 
                 var alreadyStuffed = await _context.StoreMovements
                     .Where(m => m.GrnPalletId == req.GrnPalletId)
@@ -372,7 +421,8 @@ namespace DFN_BMS.Controllers
                     SlotNumber = req.SlotNumber,
                     Side = req.Side,
                     Quantity = req.Quantity,
-                    MovementDate = DateTime.Now
+                    MovementDate = DateTime.Now,
+                    CreatedBy = req.CreatedBy?.Trim()
                 };
 
                 _context.StoreMovements.Add(movement);
@@ -394,6 +444,8 @@ namespace DFN_BMS.Controllers
             public int StorePositionId { get; set; }
             public string Side { get; set; } = "Front";
             public decimal Quantity { get; set; }
+            public string? CreatedBy { get; set; }
+
         }
 
         [HttpPost("stuff")]
@@ -442,7 +494,8 @@ namespace DFN_BMS.Controllers
                     StorePositionId = req.StorePositionId,
                     Side = req.Side,
                     Quantity = req.Quantity,
-                    MovementDate = DateTime.Now
+                    MovementDate = DateTime.Now,
+                    CreatedBy = req.CreatedBy?.Trim()
                 };
 
                 _context.StoreMovements.Add(movement);

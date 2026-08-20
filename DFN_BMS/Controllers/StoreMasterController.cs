@@ -19,6 +19,27 @@ namespace DFN_BMS.Controllers
             _context = context;
         }
 
+        [HttpGet("configured-parts")]
+        public async Task<IActionResult> GetConfiguredParts()
+        {
+            var data = await _context.StoreMasters
+                .Where(x => x.PartNumberId.HasValue)
+                .Include(x => x.PartNumber)
+                .Select(x => new
+                {
+                    id = x.PartNumber.Id,
+                    itemNumber = x.PartNumber.ItemNumber,
+                    itemName = x.PartNumber.ItemName,
+                    uom = x.PartNumber.Uom
+                })
+                .Distinct()
+                .OrderBy(x => x.itemNumber)
+                .ToListAsync();
+
+            return Ok(data);
+        }
+
+
         // GET: api/StoreMaster/parts-list
         // Feeds the new Part Number dropdown on the Store Master form.
         [HttpGet("parts-list")]
@@ -170,6 +191,7 @@ namespace DFN_BMS.Controllers
         }
 
         // PUT: api/StoreMaster/5
+        // PUT: api/StoreMaster/5
         [HttpPut("{id}")]
         public async Task<IActionResult> Update(int id, [FromBody] StoreMaster model)
         {
@@ -178,11 +200,12 @@ namespace DFN_BMS.Controllers
             if (entity == null)
                 return NotFound(new { message = "Store record not found" });
 
+            // Pallet Type is assigned once at creation and never changes on edit,
+            // so it is intentionally NOT required/validated here.
             if (string.IsNullOrWhiteSpace(model.StoreLocation) ||
-                model.PalletTypeId <= 0 ||
                 string.IsNullOrWhiteSpace(model.ColourCode))
             {
-                return BadRequest(new { message = "Store Location, Pallet Type and Colour are required" });
+                return BadRequest(new { message = "Store Location and Colour are required" });
             }
 
             if (model.PartNumberId.HasValue)
@@ -193,9 +216,9 @@ namespace DFN_BMS.Controllers
             }
 
             entity.StoreLocation = model.StoreLocation.Trim();
-            entity.PalletTypeId = model.PalletTypeId;
             entity.ColourCode = model.ColourCode.Trim();
             entity.PartNumberId = model.PartNumberId;
+            // entity.PalletTypeId intentionally left unchanged — immutable after creation.
             entity.ModifiedDate = DateTime.Now;
 
             await _context.SaveChangesAsync();
