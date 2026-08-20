@@ -20,228 +20,675 @@ namespace DFN_BMS.Controllers
             _context = context;
         }
 
-        // GET: api/Reports/full?fromDate=2026-01-01&toDate=2026-01-31
-        // ★ NEW: single merged report — no tabs. One row per GRN line,
-        // enriched left-to-right across the whole pallet lifecycle:
-        //   GRN Entry/Post  ->  Store Movement (where it was stuffed)
-        //   ->  Material Issue (who/when it was issued out, if at all)
+        // ============================================================
+        // FULL REPORT
         //
-        // Filters by PO Date (same open-ended-range behaviour as before).
-        // Note: GrnLine.PalletNo/FifoPalletNo (the "EX-xx" / FIFO label
-        // pallet) is a different identifier from GrnPallet.PalletNo (the
-        // "Pxxx" pallet Store Movement actually stuffs and Material Issue
-        // matches against) — both are surfaced as separate columns so
-        // nothing is silently conflated.
+        // GET:
+        // /api/Reports/full
+        //
+        // Optional filters:
+        // fromDate
+        // toDate
+        // itemId
+        // itemGroupId
+        // supplierId
+        //
+        // Example:
+        // /api/Reports/full?fromDate=2026-08-01&toDate=2026-08-18
+        //
+        // /api/Reports/full?itemId=1
+        //
+        // /api/Reports/full?itemGroupId=2
+        //
+        // /api/Reports/full?supplierId=3
+        //
+        // Multiple:
+        // /api/Reports/full?fromDate=2026-08-01
+        // &toDate=2026-08-18
+        // &itemId=1
+        // &itemGroupId=2
+        // &supplierId=3
+        // ============================================================
+
         [HttpGet("full")]
-        public async Task<IActionResult> GetFullReport([FromQuery] DateTime? fromDate, [FromQuery] DateTime? toDate)
+        public async Task<IActionResult> GetFullReport(
+            [FromQuery] DateTime? fromDate,
+            [FromQuery] DateTime? toDate,
+            [FromQuery] int? itemId,
+            [FromQuery] int? itemGroupId,
+            [FromQuery] int? supplierId)
         {
             try
             {
+                // ====================================================
+                // VALIDATE DATE
+                // ====================================================
+
+                if (fromDate.HasValue &&
+                    toDate.HasValue &&
+                    fromDate.Value.Date > toDate.Value.Date)
+                {
+                    return BadRequest(new
+                    {
+                        message = "From Date cannot be after To Date"
+                    });
+                }
+
+
+                // ====================================================
+                // BASE QUERY
+                // ====================================================
+
                 var headerQuery = _context.GrnHeaders
                     .Include(x => x.Supplier)
                     .Include(x => x.Lines)
                         .ThenInclude(l => l.Item)
                     .AsQueryable();
 
+
+                // ====================================================
+                // DATE FILTER
+                // ====================================================
+
                 if (fromDate.HasValue)
-                    headerQuery = headerQuery.Where(x => x.PoDate >= fromDate.Value.Date);
+                {
+                    headerQuery = headerQuery.Where(
+                        x => x.PoDate >= fromDate.Value.Date
+                    );
+                }
+
                 if (toDate.HasValue)
-                    headerQuery = headerQuery.Where(x => x.PoDate <= toDate.Value.Date.AddDays(1).AddTicks(-1));
+                {
+                    headerQuery = headerQuery.Where(
+                        x => x.PoDate <=
+                             toDate.Value.Date
+                                 .AddDays(1)
+                                 .AddTicks(-1)
+                    );
+                }
 
-                var headers = await headerQuery.OrderBy(x => x.PoDate).ToListAsync();
-                var lineIds = headers.SelectMany(h => h.Lines).Select(l => l.Id).ToList();
 
-                // GrnLineId -> GrnPallet (the Store Movement pallet record,
-                // separate from GrnLine.PalletNo/FifoPalletNo above).
+                // ====================================================
+                // ITEM FILTER
+                // ====================================================
+
+                if (itemId.HasValue)
+                {
+                    headerQuery = headerQuery.Where(
+                        x => x.Lines.Any(
+                            l => l.Item != null &&
+                                 l.Item.Id == itemId.Value
+                        )
+                    );
+                }
+
+
+                // ====================================================
+                // ITEM GROUP FILTER
+                // ====================================================
+                //
+                // Assumes:
+                // Item.ItemGroupId
+                //
+                // If your Item model uses another property name,
+                // change l.Item.ItemGroupId here.
+                // ====================================================
+
+                if (itemGroupId.HasValue)
+                {
+                    headerQuery = headerQuery.Where(
+                        x => x.Lines.Any(
+                            l => l.Item != null &&
+                                 l.Item.ItemGroupId == itemGroupId.Value
+                        )
+                    );
+                }
+
+
+                // ====================================================
+                // SUPPLIER FILTER
+                // ====================================================
+
+                if (supplierId.HasValue)
+                {
+                    headerQuery = headerQuery.Where(
+                        x => x.Supplier != null &&
+                             x.Supplier.Id == supplierId.Value
+                    );
+                }
+
+
+                // ====================================================
+                // GET GRN HEADERS
+                // ====================================================
+
+                var headers = await headerQuery
+                    .OrderBy(x => x.PoDate)
+                    .ToListAsync();
+
+
+                // ====================================================
+                // GET GRN LINE IDS
+                // ====================================================
+
+                var lineIds = headers
+                    .SelectMany(h => h.Lines)
+                    .Select(l => l.Id)
+                    .ToList();
+
+
+                // ====================================================
+                // GET STORE MOVEMENT / GRN PALLETS
+                // ====================================================
+
                 var pallets = await _context.GrnPallets
                     .Where(p => lineIds.Contains(p.GrnLineId))
                     .ToListAsync();
-                var palletsByLineId = pallets.ToDictionary(p => p.GrnLineId, p => p);
-                var palletIds = pallets.Select(p => p.Id).ToList();
 
-                // Earliest Store Movement per pallet = where/when it was
-                // first stuffed into a store position or rack slot.
+
+                var palletsByLineId = pallets
+                    .GroupBy(p => p.GrnLineId)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.First()
+                    );
+
+
+                var palletIds = pallets
+                    .Select(p => p.Id)
+                    .ToList();
+
+
+                // ====================================================
+                // GET STORE MOVEMENTS
+                // ====================================================
+
                 var movements = await _context.StoreMovements
+
                     .Include(m => m.StorePosition)
                         .ThenInclude(sp => sp.Store)
+
                     .Include(m => m.RackRow)
                         .ThenInclude(r => r.Column)
                             .ThenInclude(c => c.Rack)
                                 .ThenInclude(rk => rk.Store)
                                     .ThenInclude(lm => lm.StoreMaster)
-                    .Where(m => m.GrnPalletId != null && palletIds.Contains(m.GrnPalletId.Value))
-                    .ToListAsync();
-                var earliestMovementByPalletId = movements
-                    .GroupBy(m => m.GrnPalletId.Value)
-                    .ToDictionary(g => g.Key, g => g.OrderBy(m => m.MovementDate).First());
 
-                // Material Issue is matched by GrnPallet.PalletNo ("Pxxx").
-                var storePalletNos = pallets.Select(p => p.PalletNo).Where(p => p != null).ToList();
-                var issues = await _context.MaterialIssues
-                    .Where(mi => mi.PalletNo != null && storePalletNos.Contains(mi.PalletNo))
+                    .Where(
+                        m =>
+                            m.GrnPalletId != null &&
+                            palletIds.Contains(m.GrnPalletId.Value)
+                    )
+
                     .ToListAsync();
+
+
+                // ====================================================
+                // EARLIEST STORE MOVEMENT FOR EACH PALLET
+                // ====================================================
+
+                var earliestMovementByPalletId = movements
+                    .GroupBy(m => m.GrnPalletId!.Value)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.OrderBy(m => m.MovementDate).First()
+                    );
+
+
+                // ====================================================
+                // GET MATERIAL ISSUES
+                // ====================================================
+
+                var storePalletNos = pallets
+                    .Select(p => p.PalletNo)
+                    .Where(p => !string.IsNullOrEmpty(p))
+                    .ToList();
+
+
+                var issues = await _context.MaterialIssues
+                    .Where(
+                        mi =>
+                            mi.PalletNo != null &&
+                            storePalletNos.Contains(mi.PalletNo)
+                    )
+                    .ToListAsync();
+
+
+                // ====================================================
+                // LATEST MATERIAL ISSUE FOR EACH PALLET
+                // ====================================================
+
                 var latestIssueByPalletNo = issues
                     .GroupBy(i => i.PalletNo)
-                    .ToDictionary(g => g.Key, g => g.OrderByDescending(i => i.IssueDate).First());
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.OrderByDescending(i => i.IssueDate).First()
+                    );
+
+
+                // ====================================================
+                // BUILD FINAL REPORT
+                // ====================================================
 
                 var rows = new List<object>();
 
+
                 foreach (var h in headers)
                 {
-                    var lines = h.Lines.Any() ? h.Lines.Cast<GrnLine>().ToList() : new List<GrnLine> { null };
+                    var lines = h.Lines.Any()
+                        ? h.Lines.Cast<GrnLine>().ToList()
+                        : new List<GrnLine> { null };
+
 
                     foreach (var l in lines)
                     {
-                        var pallet = l != null && palletsByLineId.ContainsKey(l.Id) ? palletsByLineId[l.Id] : null;
-                        var movement = pallet != null && earliestMovementByPalletId.ContainsKey(pallet.Id)
-                            ? earliestMovementByPalletId[pallet.Id]
-                            : null;
-                        var issue = pallet?.PalletNo != null && latestIssueByPalletNo.ContainsKey(pallet.PalletNo)
-                            ? latestIssueByPalletNo[pallet.PalletNo]
-                            : null;
+                        // ============================================
+                        // GET PALLET
+                        // ============================================
 
-                        var storeLocation = movement?.StorePosition?.Store?.StoreLocation
-                            ?? movement?.RackRow?.Column?.Rack?.Store?.StoreMaster?.StoreLocation;
+                        var pallet =
+                            l != null &&
+                            palletsByLineId.ContainsKey(l.Id)
+                                ? palletsByLineId[l.Id]
+                                : null;
 
-                        var status = issue != null ? "Issued"
-                            : movement != null ? "In Store"
-                            : (l != null && l.IsPosted) ? "Posted"
-                            : "Not Posted";
+
+                        // ============================================
+                        // GET STORE MOVEMENT
+                        // ============================================
+
+                        var movement =
+                            pallet != null &&
+                            earliestMovementByPalletId.ContainsKey(pallet.Id)
+                                ? earliestMovementByPalletId[pallet.Id]
+                                : null;
+
+
+                        // ============================================
+                        // GET MATERIAL ISSUE
+                        // ============================================
+
+                        var issue =
+                            pallet?.PalletNo != null &&
+                            latestIssueByPalletNo.ContainsKey(pallet.PalletNo)
+                                ? latestIssueByPalletNo[pallet.PalletNo]
+                                : null;
+
+
+                        // ============================================
+                        // STORE LOCATION
+                        // ============================================
+
+                        var storeLocation =
+                            movement?.StorePosition?.Store?.StoreLocation
+                            ??
+                            movement?.RackRow?.Column?.Rack?.Store?
+                                .StoreMaster?.StoreLocation;
+
+
+                        // ============================================
+                        // STATUS
+                        // ============================================
+
+                        var status =
+                            issue != null
+                                ? "Issued"
+                                : movement != null
+                                    ? "In Store"
+                                    : (l != null && l.IsPosted)
+                                        ? "Posted"
+                                        : "Not Posted";
+
+
+                        // ============================================
+                        // ADD REPORT ROW
+                        // ============================================
 
                         rows.Add(new
                         {
                             h.GrnNumber,
-                            SupplierName = h.Supplier != null ? h.Supplier.SupplierName : null,
+
+                            SupplierName =
+                                h.Supplier != null
+                                    ? h.Supplier.SupplierName
+                                    : null,
+
                             h.PoNumber,
+
                             h.PoDate,
+
                             h.GrnType,
+
                             h.SupplierInvoiceNumber,
+
                             h.SupplierInvoiceDate,
-                            PartNumber = l?.Item?.ItemNumber,
-                            PartName = l?.Item?.ItemName,
-                            Quantity = l?.Quantity,
-                            PalletQuantity = l?.PalletQuantity,
-                            Rate = l?.Rate,
-                            TotalValue = l?.TotalValue,
-                            LabelPalletNo = l?.PalletNo,
-                            FifoPalletNo = l?.FifoPalletNo,
-                            StorePalletNo = pallet?.PalletNo,
-                            StoreLocation = storeLocation,
-                            MovementDate = movement?.MovementDate,
-                            IssuedTo = issue?.IssuedTo,
-                            IssuedBy = issue?.IssuedBy,
-                            IssueDate = issue?.IssueDate,
-                            Status = status
+
+                            PartNumber =
+                                l?.Item?.ItemNumber,
+
+                            PartName =
+                                l?.Item?.ItemName,
+
+                            Quantity =
+                                l?.Quantity,
+
+                            PalletQuantity =
+                                l?.PalletQuantity,
+
+                            Rate =
+                                l?.Rate,
+
+                            TotalValue =
+                                l?.TotalValue,
+
+                            LabelPalletNo =
+                                l?.PalletNo,
+
+                            FifoPalletNo =
+                                l?.FifoPalletNo,
+
+                            StorePalletNo =
+                                pallet?.PalletNo,
+
+                            StoreLocation =
+                                storeLocation,
+
+                            MovementDate =
+                                movement?.MovementDate,
+
+                            IssuedTo =
+                                issue?.IssuedTo,
+
+                            IssuedBy =
+                                issue?.IssuedBy,
+
+                            IssueDate =
+                                issue?.IssueDate,
+
+                            Status =
+                                status
                         });
                     }
                 }
+
+
+                // ====================================================
+                // RETURN RESULT
+                // ====================================================
 
                 return Ok(rows);
             }
             catch (Exception ex)
             {
-                var detail = ex.InnerException?.Message ?? ex.Message;
-                return StatusCode(500, new { message = $"Failed to load report: {detail}" });
+                var detail =
+                    ex.InnerException?.Message ??
+                    ex.Message;
+
+                return StatusCode(
+                    500,
+                    new
+                    {
+                        message =
+                            $"Failed to load report: {detail}"
+                    }
+                );
             }
         }
 
-        // GET: api/Reports/grn?fromDate=2026-01-01&toDate=2026-01-31
-        // Filters by PO Date. Both dates optional — omit either (or both)
-        // to get an open-ended range / everything. Kept alongside /full
-        // in case anything else still links directly to a GRN-only export.
+
+        // ============================================================
+        // GRN REPORT
+        // ============================================================
+
         [HttpGet("grn")]
-        public async Task<IActionResult> GetGrnReport([FromQuery] DateTime? fromDate, [FromQuery] DateTime? toDate)
+        public async Task<IActionResult> GetGrnReport(
+            [FromQuery] DateTime? fromDate,
+            [FromQuery] DateTime? toDate)
         {
             try
             {
+                if (fromDate.HasValue &&
+                    toDate.HasValue &&
+                    fromDate.Value.Date > toDate.Value.Date)
+                {
+                    return BadRequest(new
+                    {
+                        message = "From Date cannot be after To Date"
+                    });
+                }
+
+
                 var query = _context.GrnHeaders
+
                     .Include(x => x.Supplier)
+
                     .Include(x => x.Lines)
                         .ThenInclude(l => l.Item)
+
                     .AsQueryable();
 
+
                 if (fromDate.HasValue)
-                    query = query.Where(x => x.PoDate >= fromDate.Value.Date);
+                {
+                    query = query.Where(
+                        x => x.PoDate >= fromDate.Value.Date
+                    );
+                }
+
+
                 if (toDate.HasValue)
-                    query = query.Where(x => x.PoDate <= toDate.Value.Date.AddDays(1).AddTicks(-1));
+                {
+                    query = query.Where(
+                        x =>
+                            x.PoDate <=
+                            toDate.Value.Date
+                                .AddDays(1)
+                                .AddTicks(-1)
+                    );
+                }
+
 
                 var headers = await query
                     .OrderBy(x => x.PoDate)
                     .ToListAsync();
 
+
                 var rows = headers
-                    .SelectMany(h => h.Lines.DefaultIfEmpty(), (h, l) => new
-                    {
-                        h.GrnNumber,
-                        SupplierName = h.Supplier != null ? h.Supplier.SupplierName : null,
-                        h.PoNumber,
-                        h.PoDate,
-                        h.GrnType,
-                        h.SupplierInvoiceNumber,
-                        h.SupplierInvoiceDate,
-                        PartNumber = l != null ? l.Item.ItemNumber : null,
-                        PartName = l != null ? l.Item.ItemName : null,
-                        Quantity = l != null ? l.Quantity : (decimal?)null,
-                        PalletQuantity = l != null ? l.PalletQuantity : null,
-                        Rate = l != null ? l.Rate : (decimal?)null,
-                        TotalValue = l != null ? l.TotalValue : (decimal?)null,
-                        IsPosted = l != null && l.IsPosted,
-                        PalletNo = l != null ? l.PalletNo : null,
-                        FifoPalletNo = l != null ? l.FifoPalletNo : null
-                    })
+
+                    .SelectMany(
+                        h => h.Lines.DefaultIfEmpty(),
+                        (h, l) => new
+                        {
+                            h.GrnNumber,
+
+                            SupplierName =
+                                h.Supplier != null
+                                    ? h.Supplier.SupplierName
+                                    : null,
+
+                            h.PoNumber,
+
+                            h.PoDate,
+
+                            h.GrnType,
+
+                            h.SupplierInvoiceNumber,
+
+                            h.SupplierInvoiceDate,
+
+                            PartNumber =
+                                l != null
+                                    ? l.Item.ItemNumber
+                                    : null,
+
+                            PartName =
+                                l != null
+                                    ? l.Item.ItemName
+                                    : null,
+
+                            Quantity =
+                                l != null
+                                    ? l.Quantity
+                                    : (decimal?)null,
+
+                            PalletQuantity =
+                                l != null
+                                    ? l.PalletQuantity
+                                    : null,
+
+                            Rate =
+                                l != null
+                                    ? l.Rate
+                                    : (decimal?)null,
+
+                            TotalValue =
+                                l != null
+                                    ? l.TotalValue
+                                    : (decimal?)null,
+
+                            IsPosted =
+                                l != null &&
+                                l.IsPosted,
+
+                            PalletNo =
+                                l != null
+                                    ? l.PalletNo
+                                    : null,
+
+                            FifoPalletNo =
+                                l != null
+                                    ? l.FifoPalletNo
+                                    : null
+                        }
+                    )
                     .ToList();
+
 
                 return Ok(rows);
             }
             catch (Exception ex)
             {
-                var detail = ex.InnerException?.Message ?? ex.Message;
-                return StatusCode(500, new { message = $"Failed to load report: {detail}" });
+                var detail =
+                    ex.InnerException?.Message ??
+                    ex.Message;
+
+                return StatusCode(
+                    500,
+                    new
+                    {
+                        message =
+                            $"Failed to load GRN report: {detail}"
+                    }
+                );
             }
         }
 
-        // GET: api/Reports/material-issue?fromDate=2026-01-01&toDate=2026-01-31
-        // Filters by IssueDate. Kept alongside /full for the same reason
-        // as /grn above.
+
+        // ============================================================
+        // MATERIAL ISSUE REPORT
+        // ============================================================
+
         [HttpGet("material-issue")]
-        public async Task<IActionResult> GetMaterialIssueReport([FromQuery] DateTime? fromDate, [FromQuery] DateTime? toDate)
+        public async Task<IActionResult> GetMaterialIssueReport(
+            [FromQuery] DateTime? fromDate,
+            [FromQuery] DateTime? toDate)
         {
             try
             {
+                if (fromDate.HasValue &&
+                    toDate.HasValue &&
+                    fromDate.Value.Date > toDate.Value.Date)
+                {
+                    return BadRequest(new
+                    {
+                        message = "From Date cannot be after To Date"
+                    });
+                }
+
+
                 var query = _context.MaterialIssues
+
                     .Include(x => x.Item)
+
                     .AsQueryable();
 
+
                 if (fromDate.HasValue)
-                    query = query.Where(x => x.IssueDate >= fromDate.Value.Date);
+                {
+                    query = query.Where(
+                        x => x.IssueDate >= fromDate.Value.Date
+                    );
+                }
+
+
                 if (toDate.HasValue)
-                    query = query.Where(x => x.IssueDate <= toDate.Value.Date.AddDays(1).AddTicks(-1));
+                {
+                    query = query.Where(
+                        x =>
+                            x.IssueDate <=
+                            toDate.Value.Date
+                                .AddDays(1)
+                                .AddTicks(-1)
+                    );
+                }
+
 
                 var rows = await query
+
                     .OrderBy(x => x.IssueDate)
+
                     .Select(x => new
                     {
                         x.IssueNumber,
-                        PartNumber = x.Item != null ? x.Item.ItemNumber : null,
-                        PartName = x.Item != null ? x.Item.ItemName : null,
+
+                        PartNumber =
+                            x.Item != null
+                                ? x.Item.ItemNumber
+                                : null,
+
+                        PartName =
+                            x.Item != null
+                                ? x.Item.ItemName
+                                : null,
+
                         x.Quantity,
+
                         x.IssuedTo,
+
                         x.IssuedBy,
+
                         x.StoreLocation,
+
                         x.PalletNo,
+
                         x.GrnNumber,
+
                         x.Remarks,
+
                         x.IssueDate,
+
                         x.CreatedDate
                     })
+
                     .ToListAsync();
+
 
                 return Ok(rows);
             }
             catch (Exception ex)
             {
-                var detail = ex.InnerException?.Message ?? ex.Message;
-                return StatusCode(500, new { message = $"Failed to load material issue report: {detail}" });
+                var detail =
+                    ex.InnerException?.Message ??
+                    ex.Message;
+
+                return StatusCode(
+                    500,
+                    new
+                    {
+                        message =
+                            $"Failed to load material issue report: {detail}"
+                    }
+                );
             }
         }
     }

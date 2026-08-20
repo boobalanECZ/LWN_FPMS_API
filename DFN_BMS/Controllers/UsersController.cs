@@ -53,6 +53,7 @@ public class UsersController : ControllerBase
             join d in _context.DepartmentMasters
                 on u.DepartmentId equals d.Id
             where u.IsActive
+            orderby u.Id descending
             select new
             {
                 id = u.Id,

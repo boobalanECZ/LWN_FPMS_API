@@ -51,5 +51,7 @@ namespace DFN_BMS.Models
         public decimal Quantity { get; set; }
 
         public DateTime MovementDate { get; set; } = DateTime.Now;
+
+        public string? CreatedBy { get; set; }
     }
 }
