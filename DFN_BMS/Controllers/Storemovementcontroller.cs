@@ -61,13 +61,12 @@ namespace DFN_BMS.Controllers
                                     .ThenInclude(lm => lm.StoreMaster)
                     .ToListAsync();
 
-                var issuedPalletNos = await _context.MaterialIssues
-                    .Where(x => x.PalletNo != null)
-                    .Select(x => x.PalletNo)
-                    .ToListAsync();
+                var issuedGrnPalletIds = await _context.MaterialIssues
+     .Where(x => x.GrnPalletId.HasValue)
+     .Select(x => x.GrnPalletId.Value)
+     .ToListAsync();
 
-                var issuedSet = new HashSet<string>(issuedPalletNos, StringComparer.OrdinalIgnoreCase);
-
+                var issuedSet = new HashSet<int>(issuedGrnPalletIds);
                 // Group by pallet so Front+Rear (or any multi-row stuffing)
                 // collapses into a single entry per pallet.
                 var grouped = movements
@@ -113,9 +112,9 @@ namespace DFN_BMS.Controllers
                                 : "SAMPLE"
                         };
                     })
-                    // Exclude anything already issued — real, server-side
-                    // duplicate prevention.
-                    .Where(r => !issuedSet.Contains(r.palletNo))
+                       // Exclude anything already issued — real, server-side
+                       // duplicate prevention.
+                       .Where(r => !issuedSet.Contains(r.id!.Value))
                     // TRUE FIFO: earliest movement first.
                     .OrderBy(r => r.movementDate)
                     .ToList();
@@ -331,7 +330,15 @@ namespace DFN_BMS.Controllers
                                     row.Fixture,
                                     OccupiedSlots = _context.StoreMovements
                                         .Where(m => m.RackRowId == row.Id)
-                                        .Select(m => new { m.SlotNumber, m.Side, m.Quantity, m.Id, m.GrnPalletId })
+                                        .Select(m => new
+                                        {
+                                            m.SlotNumber,
+                                            m.Side,
+                                            m.Quantity,
+                                            m.Id,
+                                            m.GrnPalletId,
+                                            PalletNo = m.GrnPallet != null ? m.GrnPallet.PalletNo : null
+                                        })
                                         .ToList()
                                 }).ToList()
                             }).ToList()
@@ -373,11 +380,26 @@ namespace DFN_BMS.Controllers
                 if (req.Quantity <= 0)
                     return BadRequest(new { message = "Quantity must be greater than 0" });
 
+
+
+
                 var pallet = await _context.GrnPallets
-                    .Include(p => p.GrnLine)
-                    .FirstOrDefaultAsync(p => p.Id == req.GrnPalletId);
+    .Include(p => p.GrnLine)
+    .FirstOrDefaultAsync(p => p.Id == req.GrnPalletId);
                 if (pallet == null)
                     return BadRequest(new { message = "Pallet not found" });
+
+                // NEW: block re-stuffing a pallet that has already been issued out.
+                var alreadyIssued = await _context.MaterialIssues
+                    .AnyAsync(x => x.GrnPalletId == req.GrnPalletId);
+                if (alreadyIssued)
+                {
+                    return BadRequest(new
+                    {
+                        message = $"Pallet {pallet.PalletNo} has already been issued and cannot be stuffed again."
+                    });
+                }
+
 
                 var row = await _context.RackRows
                     .Include(r => r.Column)
@@ -530,6 +552,73 @@ namespace DFN_BMS.Controllers
             {
                 var detail = ex.InnerException?.Message ?? ex.Message;
                 return StatusCode(500, new { message = $"Undo failed: {detail}" });
+            }
+        }
+
+        // GET: api/StoreMovement/all-pallets-status
+        //
+        // Broader than available-pallets: includes pallets currently in
+        // stock (stuffed) AND pallets that have since been issued out,
+        // each tagged with a status. Used by Store Verification, which
+        // needs to tell the difference between "never existed / not
+        // stuffed yet" and "existed but was already issued" — the two
+        // look identical if we only ever look at available-pallets.
+        [HttpGet("all-pallets-status")]
+        public async Task<IActionResult> GetAllPalletsWithStatus()
+        {
+            try
+            {
+                var stuffedIds = await _context.StoreMovements
+                    .Where(m => m.GrnPalletId != null)
+                    .Select(m => m.GrnPalletId!.Value)
+                    .Distinct()
+                    .ToListAsync();
+
+                var issuedIds = await _context.MaterialIssues
+                    .Where(x => x.GrnPalletId.HasValue)
+                    .Select(x => x.GrnPalletId!.Value)
+                    .Distinct()
+                    .ToListAsync();
+
+                var issuedSet = new HashSet<int>(issuedIds);
+                var relevantIds = stuffedIds.Union(issuedIds).Distinct().ToList();
+
+                var pallets = await _context.GrnPallets
+                    .Where(p => relevantIds.Contains(p.Id))
+                    .Include(p => p.GrnLine)
+                        .ThenInclude(l => l.Item)
+                    .Include(p => p.GrnLine)
+                        .ThenInclude(l => l.Header)
+                    .Select(p => new
+                    {
+                        id = p.Id,
+                        itemId = p.GrnLine.ItemId,
+                        partLabel = p.GrnLine.Item.ItemNumber + " - " + p.GrnLine.Item.ItemName,
+                        palletNo = p.PalletNo,
+                        fifoPalletNo = p.GrnLine.FifoPalletNo,
+                        grnNo = p.GrnLine.Header.GrnNumber,
+                        quantity = p.Quantity
+                    })
+                    .ToListAsync();
+
+                var result = pallets.Select(p => new
+                {
+                    p.id,
+                    p.itemId,
+                    p.partLabel,
+                    p.palletNo,
+                    p.fifoPalletNo,
+                    p.grnNo,
+                    p.quantity,
+                    status = issuedSet.Contains(p.id) ? "ISSUED" : "IN_STOCK"
+                });
+
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                var detail = ex.InnerException?.Message ?? ex.Message;
+                return StatusCode(500, new { message = $"Failed to load pallet status: {detail}" });
             }
         }
     }

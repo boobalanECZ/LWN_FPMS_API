@@ -235,6 +235,107 @@ namespace DFN_BMS.Controllers
         // MOBILE CREATE
         // KEEP YOUR EXISTING POST
         // =========================================================
+        //[HttpPost]
+        //public async Task<IActionResult> Create([FromBody] MaterialIssue model)
+        //{
+        //    try
+        //    {
+        //        if (model.ItemId <= 0 ||
+        //            model.Quantity <= 0 ||
+        //            string.IsNullOrWhiteSpace(model.IssuedTo) ||
+        //            string.IsNullOrWhiteSpace(model.IssuedBy))
+        //        {
+        //            return BadRequest(new
+        //            {
+        //                message =
+        //                    "Part Number, Quantity, Issued To and Issued By are required"
+        //            });
+        //        }
+
+        //        var itemExists = await _context.ItemMasters
+        //            .AnyAsync(x => x.Id == model.ItemId);
+
+        //        if (!itemExists)
+        //        {
+        //            return BadRequest(new
+        //            {
+        //                message = "Selected Part Number does not exist"
+        //            });
+        //        }
+
+        //        // Duplicate pallet protection
+        //        if (!string.IsNullOrWhiteSpace(model.PalletNo))
+        //        {
+        //            var alreadyIssued =
+        //                await _context.MaterialIssues
+        //                    .AnyAsync(x => x.PalletNo == model.PalletNo);
+
+        //            if (alreadyIssued)
+        //            {
+        //                return BadRequest(new
+        //                {
+        //                    message =
+        //                        $"Pallet {model.PalletNo} has already been issued."
+        //                });
+        //            }
+        //        }
+
+        //        var entity = new MaterialIssue
+        //        {
+        //            IssueNumber =
+        //                await GenerateIssueNumberAsync(),
+
+        //            ItemId = model.ItemId,
+
+        //            Quantity = model.Quantity,
+
+        //            IssuedTo =
+        //                model.IssuedTo.Trim(),
+
+        //            IssuedBy =
+        //                model.IssuedBy.Trim(),
+
+        //            StoreLocation =
+        //                model.StoreLocation?.Trim(),
+
+        //            PalletNo =
+        //                model.PalletNo?.Trim(),
+
+        //            GrnNumber =
+        //                model.GrnNumber?.Trim(),
+
+        //            Remarks =
+        //                model.Remarks?.Trim(),
+
+        //            IssueDate = DateTime.Now,
+
+        //            CreatedDate = DateTime.Now
+        //        };
+
+        //        _context.MaterialIssues.Add(entity);
+
+        //        await _context.SaveChangesAsync();
+
+        //        return Ok(new
+        //        {
+        //            entity.Id,
+        //            entity.IssueNumber
+        //        });
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        var detail =
+        //            ex.InnerException?.Message ??
+        //            ex.Message;
+
+        //        return StatusCode(500, new
+        //        {
+        //            message =
+        //                $"Save failed: {detail}"
+        //        });
+        //    }
+        //}
+
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] MaterialIssue model)
         {
@@ -263,12 +364,13 @@ namespace DFN_BMS.Controllers
                     });
                 }
 
-                // Duplicate pallet protection
-                if (!string.IsNullOrWhiteSpace(model.PalletNo))
+                // Duplicate pallet protection — match on GrnPalletId (safe/unique),
+                // not PalletNo (recyclable label).
+                if (model.GrnPalletId.HasValue)
                 {
                     var alreadyIssued =
                         await _context.MaterialIssues
-                            .AnyAsync(x => x.PalletNo == model.PalletNo);
+                            .AnyAsync(x => x.GrnPalletId == model.GrnPalletId.Value);
 
                     if (alreadyIssued)
                     {
@@ -282,39 +384,38 @@ namespace DFN_BMS.Controllers
 
                 var entity = new MaterialIssue
                 {
-                    IssueNumber =
-                        await GenerateIssueNumberAsync(),
-
+                    IssueNumber = await GenerateIssueNumberAsync(),
                     ItemId = model.ItemId,
-
                     Quantity = model.Quantity,
-
-                    IssuedTo =
-                        model.IssuedTo.Trim(),
-
-                    IssuedBy =
-                        model.IssuedBy.Trim(),
-
-                    StoreLocation =
-                        model.StoreLocation?.Trim(),
-
-                    PalletNo =
-                        model.PalletNo?.Trim(),
-
-                    GrnNumber =
-                        model.GrnNumber?.Trim(),
-
-                    Remarks =
-                        model.Remarks?.Trim(),
-
+                    IssuedTo = model.IssuedTo.Trim(),
+                    IssuedBy = model.IssuedBy.Trim(),
+                    StoreLocation = model.StoreLocation?.Trim(),
+                    PalletNo = model.PalletNo?.Trim(),
+                    GrnPalletId = model.GrnPalletId,
+                    GrnNumber = model.GrnNumber?.Trim(),
+                    Remarks = model.Remarks?.Trim(),
                     IssueDate = DateTime.Now,
-
                     CreatedDate = DateTime.Now
                 };
 
                 _context.MaterialIssues.Add(entity);
-
                 await _context.SaveChangesAsync();
+
+                // -----------------------------------------------------
+                // FREE UP THE RACK SLOT(S) THIS PALLET WAS OCCUPYING
+                // -----------------------------------------------------
+                if (entity.GrnPalletId.HasValue)
+                {
+                    var movements = await _context.StoreMovements
+                        .Where(x => x.GrnPalletId == entity.GrnPalletId.Value)
+                        .ToListAsync();
+
+                    if (movements.Any())
+                    {
+                        _context.StoreMovements.RemoveRange(movements);
+                        await _context.SaveChangesAsync();
+                    }
+                }
 
                 return Ok(new
                 {

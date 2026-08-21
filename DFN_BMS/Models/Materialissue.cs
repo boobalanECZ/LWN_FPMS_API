@@ -50,5 +50,7 @@ namespace DFN_BMS.Models
         public DateTime IssueDate { get; set; } = DateTime.Now;
 
         public DateTime CreatedDate { get; set; } = DateTime.Now;
+
+        public int? GrnPalletId { get; set; }
     }
 }

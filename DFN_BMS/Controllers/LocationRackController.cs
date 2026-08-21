@@ -261,7 +261,8 @@ namespace DFN_BMS.Controllers
                     m.SlotNumber,
                     m.Side,
                     m.Quantity,
-                    m.Note
+                    m.Note,
+                    PalletNo = m.GrnPallet != null ? m.GrnPallet.PalletNo : null   // NEW
                 })
                 .ToListAsync();
 
@@ -389,5 +390,7 @@ namespace DFN_BMS.Controllers
 
             return Ok(new { message = "Deleted Successfully" });
         }
+
+
     }
 }
