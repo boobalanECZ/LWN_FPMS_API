@@ -135,6 +135,24 @@ namespace DFN_BMS.Controllers
                 // =========================================================
                 // CURRENT/FILTERED PALLET STATUS
                 // =========================================================
+                //
+                // FIX: buckets must be mutually exclusive so they always
+                // sum to totalPalletsCount. Previously "closed" was
+                // computed as "not currently stuffed" WITHOUT excluding
+                // issued pallets — but an issued pallet is also "not
+                // currently stuffed" (Material Issue deletes its
+                // StoreMovement rows to free the rack slot). That meant
+                // an issued pallet was counted a second time as "closed",
+                // and "available" (derived by subtraction) silently ate
+                // the difference — a pallet genuinely sitting in a rack
+                // could show Available = 0% even while "Pallets by
+                // Location" correctly showed it occupying a slot.
+                //
+                // Each pallet now belongs to exactly one bucket:
+                //   - Issued    : has a MaterialIssue record
+                //   - Available : currently stuffed AND not issued
+                //   - Closed    : neither stuffed nor issued
+                // =========================================================
 
                 var stuffedPalletIds =
                     filteredMovements
@@ -143,18 +161,19 @@ namespace DFN_BMS.Controllers
                         .ToHashSet();
 
 
-                var closedPalletsCount =
+                var availablePalletsCount =
                     filteredPallets.Count(
-                        p => !stuffedPalletIds.Contains(p.Id)
+                        p =>
+                            stuffedPalletIds.Contains(p.Id) &&
+                            !(p.PalletNo != null && issuedPalletNos.Contains(p.PalletNo))
                     );
 
 
-                var availablePalletsCount =
-                    Math.Max(
-                        0,
-                        totalPalletsCount
-                        - issuedPalletsCount
-                        - closedPalletsCount
+                var closedPalletsCount =
+                    filteredPallets.Count(
+                        p =>
+                            !stuffedPalletIds.Contains(p.Id) &&
+                            !(p.PalletNo != null && issuedPalletNos.Contains(p.PalletNo))
                     );
 
 
